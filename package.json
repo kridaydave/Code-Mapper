@@ -1,0 +1,29 @@
+{
+  "name": "codebase-cartographer",
+  "version": "1.0.0",
+  "description": "MCP server for codebase mapping and analysis",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "codebase-cartographer": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
+    "@modelcontextprotocol/server": "latest",
+    "graphology": "latest",
+    "graphology-metrics": "^2.4.0",
+    "graphology-shortest-path": "latest",
+    "ts-morph": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}
