@@ -43,9 +43,9 @@ Add this to your MCP client configuration:
 ```json
 {
   "mcpServers": {
-    "codebase-cartographer": {
+    "CodeGraph": {
       "command": "npx",
-      "args": ["tsx", "/absolute/path/to/codebase-cartographer/src/index.ts"]
+      "args": ["tsx", "/absolute/path/to/CodeGraph/src/index.ts"]
     }
   }
 }
@@ -56,9 +56,9 @@ Or after building:
 ```json
 {
   "mcpServers": {
-    "codebase-cartographer": {
+    "CodeGraph": {
       "command": "node",
-      "args": ["/absolute/path/to/codebase-cartographer/dist/index.js"]
+      "args": ["/absolute/path/to/CodeGraph/dist/index.js"]
     }
   }
 }

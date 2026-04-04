@@ -1,11 +1,11 @@
 {
-  "name": "codebase-cartographer",
+  "name": "CodeGraph",
   "version": "1.0.0",
   "description": "MCP server for codebase mapping and analysis",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "codebase-cartographer": "./dist/index.js"
+    "CodeGraph": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
