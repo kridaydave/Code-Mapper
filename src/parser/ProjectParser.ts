@@ -19,7 +19,6 @@ const IGNORE_PATTERNS = [
 
 export class ProjectParser {
   private project: Project;
-  private analyzer!: FileAnalyzer;
   private cache: Map<string, ParseResult> = new Map();
 
   constructor() {
@@ -35,6 +34,13 @@ export class ProjectParser {
 
   async parse(directory: string): Promise<ParseResult> {
     const absoluteDir = resolve(directory);
+
+    if (!fs.existsSync(absoluteDir)) {
+      throw new Error(`Directory does not exist: ${absoluteDir}`);
+    }
+    if (!fs.statSync(absoluteDir).isDirectory()) {
+      throw new Error(`Path is not a directory: ${absoluteDir}`);
+    }
 
     if (this.cache.has(absoluteDir)) {
       return this.cache.get(absoluteDir)!;
@@ -56,14 +62,17 @@ export class ProjectParser {
       return empty;
     }
 
-    this.project.getSourceFiles().forEach(sf => this.project.removeSourceFile(sf));
+    const sourceFiles = this.project.getSourceFiles();
+    for (const sf of sourceFiles) {
+      this.project.removeSourceFile(sf);
+    }
     this.project.addSourceFilesAtPaths(files);
 
-    this.analyzer = new FileAnalyzer(this.project, absoluteDir);
+    const analyzer = new FileAnalyzer(this.project, absoluteDir);
 
     const fileInfos: FileInfo[] = [];
     for (const sourceFile of this.project.getSourceFiles()) {
-      fileInfos.push(this.analyzer.analyze(sourceFile));
+      fileInfos.push(analyzer.analyze(sourceFile));
     }
 
     const result: ParseResult = {

@@ -1,26 +1,29 @@
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const Graph = require("graphology");
+const Graph: typeof import("graphology").default = require("graphology");
+import type { AbstractGraph, Attributes } from "graphology-types";
 import * as shortestPath from "graphology-shortest-path";
 import { centrality } from "graphology-metrics";
 import { ParseResult } from "../parser/types.js";
 import { GraphNode, GraphEdge, RankedFile, FunctionMatch, CallChainResult } from "./types.js";
 
+type CodeGraph = AbstractGraph<Attributes, Attributes, Attributes>;
+
 export class GraphAnalyzer {
-  private graph: any;
+  private graph: CodeGraph;
   private parseResult: ParseResult;
   private nodes: GraphNode[];
   private edges: GraphEdge[];
 
-  constructor(graph: any, parseResult: ParseResult, nodes: GraphNode[], edges: GraphEdge[]) {
+  constructor(graph: CodeGraph, parseResult: ParseResult, nodes: GraphNode[], edges: GraphEdge[]) {
     this.graph = graph;
     this.parseResult = parseResult;
     this.nodes = nodes;
     this.edges = edges;
   }
 
-  getGraph(): any {
+  getGraph(): CodeGraph {
     return this.graph;
   }
 
@@ -40,9 +43,16 @@ export class GraphAnalyzer {
     const scores = new Map<string, number>();
 
     if (metric === "betweenness") {
-      const betweenness = centrality.betweenness(this.graph);
-      for (const [node, score] of Object.entries(betweenness)) {
-        scores.set(node, score as number);
+      const nodeCount = this.graph.order;
+      if (nodeCount > 200) {
+        for (const node of fileNodes) {
+          scores.set(node.id, this.graph.inDegree(node.id));
+        }
+      } else {
+        const betweenness = centrality.betweenness(this.graph);
+        for (const [node, score] of Object.entries(betweenness)) {
+          scores.set(node, score as number);
+        }
       }
     } else if (metric === "inDegree") {
       for (const node of fileNodes) {
@@ -55,8 +65,9 @@ export class GraphAnalyzer {
     }
 
     const ranked: RankedFile[] = fileNodes
-      .map((node: GraphNode) => {
-        const fileInfo = this.parseResult.files.find((f) => f.filePath === node.filePath)!;
+      .map((node: GraphNode): RankedFile | null => {
+        const fileInfo = this.parseResult.files.find((f) => f.filePath === node.filePath);
+        if (!fileInfo) return null;
         return {
           filePath: node.filePath,
           relativePath: fileInfo.relativePath,
@@ -65,8 +76,10 @@ export class GraphAnalyzer {
           functionCount: fileInfo.functions.length,
           classCount: fileInfo.classes.length,
           importCount: fileInfo.imports.length,
+          exportCount: fileInfo.exports.length,
         };
       })
+      .filter((r): r is RankedFile => r !== null)
       .sort((a, b) => b.score - a.score);
 
     return ranked;
@@ -88,7 +101,7 @@ export class GraphAnalyzer {
       if (!fileInfo) continue;
 
       if (node.kind === "function") {
-        const fn = fileInfo.functions.find((f) => f.name === node.label);
+        const fn = fileInfo.functions.find((f) => f.name.toLowerCase() === node.label.toLowerCase());
         if (fn) {
           matches.push({
             name: fn.name,
@@ -102,7 +115,7 @@ export class GraphAnalyzer {
           });
         }
       } else if (node.kind === "class") {
-        const cls = fileInfo.classes.find((c) => c.name === node.label);
+        const cls = fileInfo.classes.find((c) => c.name.toLowerCase() === node.label.toLowerCase());
         if (cls) {
           matches.push({
             name: cls.name,
@@ -153,7 +166,6 @@ export class GraphAnalyzer {
    * Find shortest paths between two nodes
    */
   traceCallChain(from: string, to: string): CallChainResult {
-    // Find matching nodes
     const fromNodes = this.nodes.filter((n: GraphNode) => n.label.toLowerCase().includes(from.toLowerCase()));
     const toNodes = this.nodes.filter((n: GraphNode) => n.label.toLowerCase().includes(to.toLowerCase()));
 
@@ -161,16 +173,21 @@ export class GraphAnalyzer {
       return { found: false, paths: [] };
     }
 
+    const nodeMap = new Map<string, GraphNode>(this.nodes.map(n => [n.id, n]));
     const paths: string[][] = [];
 
     for (const fromNode of fromNodes) {
       for (const toNode of toNodes) {
-        if (fromNode.id === toNode.id) continue;
+        if (fromNode.id === toNode.id) {
+          const node = fromNode;
+          paths.push([`${node.kind}:${node.label}`]);
+          continue;
+        }
 
         const pathResult = shortestPath.bidirectional(this.graph, fromNode.id, toNode.id);
         if (pathResult && pathResult.length > 0) {
           const pathLabels = pathResult.map((nodeId: string) => {
-            const node = this.nodes.find((n: GraphNode) => n.id === nodeId);
+            const node = nodeMap.get(nodeId);
             return node ? `${node.kind}:${node.label}` : nodeId;
           });
           paths.push(pathLabels);
@@ -191,7 +208,13 @@ export class GraphAnalyzer {
     const lines: string[] = ["graph TD"];
 
     const nodesToInclude = targetFile
-      ? this.nodes.filter((n: GraphNode) => n.filePath.includes(targetFile) || n.label.includes(targetFile))
+      ? this.nodes.filter((n: GraphNode) => {
+          const lowerTarget = targetFile.toLowerCase().replace(/\\/g, "/");
+          const lowerPath = n.filePath.toLowerCase().replace(/\\/g, "/");
+          const basename = lowerPath.split("/").pop() ?? "";
+          return basename.includes(lowerTarget) ||
+                 lowerPath.split("/").some(seg => seg.includes(lowerTarget));
+        })
       : this.nodes;
 
     const nodeIds = new Set(nodesToInclude.map((n: GraphNode) => n.id));
@@ -199,7 +222,8 @@ export class GraphAnalyzer {
     // Add nodes
     for (const node of nodesToInclude) {
       const safeId = this.sanitizeId(node.id);
-      lines.push(`    ${safeId}["${node.kind}: ${node.label}"]`);
+      const safeLabel = this.sanitizeMermaidText(`${node.kind}: ${node.label}`);
+      lines.push(`    ${safeId}["${safeLabel}"]`);
     }
 
     // Add edges
@@ -207,7 +231,8 @@ export class GraphAnalyzer {
       if (nodeIds.has(edge.source) && nodeIds.has(edge.target)) {
         const sourceId = this.sanitizeId(edge.source);
         const targetId = this.sanitizeId(edge.target);
-        lines.push(`    ${sourceId} -->|${edge.kind}| ${targetId}`);
+        const safeKind = this.sanitizeMermaidText(edge.kind);
+        lines.push(`    ${sourceId} -->|${safeKind}| ${targetId}`);
       }
     }
 
@@ -217,37 +242,59 @@ export class GraphAnalyzer {
   /**
    * Detect cycles in the graph
    */
-  detectCycles(): string[][] {
+  detectCycles(maxDepth = 10000): string[][] {
     const cycles: string[][] = [];
     const visited = new Set<string>();
-    const stack = new Set<string>();
-    const path: string[] = [];
+    const stackSet = new Set<string>();
 
-    const dfs = (node: string) => {
-      if (stack.has(node)) {
-        const cycleStart = path.indexOf(node);
-        if (cycleStart !== -1) {
-          cycles.push([...path.slice(cycleStart), node]);
+    for (const startNode of this.nodes) {
+      if (visited.has(startNode.id)) continue;
+
+      const workStack: Array<{ node: string; neighbors: string[]; pathIndex: number }> = [];
+      const path: string[] = [];
+
+      workStack.push({
+        node: startNode.id,
+        neighbors: this.graph.outNeighbors(startNode.id),
+        pathIndex: 0,
+      });
+
+      while (workStack.length > 0) {
+        if (workStack.length > maxDepth) break;
+
+        const frame = workStack[workStack.length - 1];
+
+        if (frame.pathIndex === 0) {
+          if (stackSet.has(frame.node)) {
+            const cycleStart = path.indexOf(frame.node);
+            if (cycleStart !== -1) {
+              cycles.push([...path.slice(cycleStart), frame.node]);
+            }
+            workStack.pop();
+            continue;
+          }
+          if (visited.has(frame.node)) {
+            workStack.pop();
+            continue;
+          }
+          visited.add(frame.node);
+          stackSet.add(frame.node);
+          path.push(frame.node);
         }
-        return;
-      }
-      if (visited.has(node)) return;
 
-      visited.add(node);
-      stack.add(node);
-      path.push(node);
-
-      for (const neighbor of this.graph.outNeighbors(node)) {
-        dfs(neighbor);
-      }
-
-      stack.delete(node);
-      path.pop();
-    };
-
-    for (const node of this.nodes) {
-      if (!visited.has(node.id)) {
-        dfs(node.id);
+        if (frame.pathIndex < frame.neighbors.length) {
+          const neighbor = frame.neighbors[frame.pathIndex];
+          frame.pathIndex++;
+          workStack.push({
+            node: neighbor,
+            neighbors: this.graph.outNeighbors(neighbor),
+            pathIndex: 0,
+          });
+        } else {
+          stackSet.delete(frame.node);
+          path.pop();
+          workStack.pop();
+        }
       }
     }
 
@@ -256,5 +303,9 @@ export class GraphAnalyzer {
 
   private sanitizeId(id: string): string {
     return id.replace(/[^a-zA-Z0-9_]/g, "_");
+  }
+
+  private sanitizeMermaidText(text: string): string {
+    return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/%%/g, "\\%%");
   }
 }

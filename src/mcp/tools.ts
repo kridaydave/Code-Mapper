@@ -1,25 +1,73 @@
+import { resolve } from "node:path";
+import * as fs from "node:fs";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
 import { ProjectParser } from "../parser/ProjectParser.js";
 import { GraphBuilder } from "../graph/GraphBuilder.js";
 import { GraphAnalyzer } from "../graph/GraphAnalyzer.js";
 import { GraphNode, GraphEdge, RankedFile } from "../graph/types.js";
-import { analyzerCache } from "./cache.js";
+import { analyzerCache, normalizeCacheKey, clearAnalyzerCache, setLastScannedDirectory } from "./cache.js";
 
-// Shared cache for parsed results and analyzers
-const parser = new ProjectParser();
+const BLOCKED_PATHS = [
+  /^c:\\windows/i,
+  /^c:\\program files/i,
+  /^\/etc\//i,
+  /^\/usr\//i,
+  /^\/var\//i,
+];
 
-async function getAnalyzer(directory: string): Promise<GraphAnalyzer> {
-  if (analyzerCache.has(directory)) {
-    return analyzerCache.get(directory)!;
+function validateDirectory(directory: string): string {
+  const absoluteDir = resolve(directory);
+
+  if (BLOCKED_PATHS.some(pattern => pattern.test(absoluteDir))) {
+    throw new Error(`Access to system path is not allowed: ${absoluteDir}`);
   }
 
+  if (!fs.existsSync(absoluteDir)) {
+    throw new Error(`Directory does not exist: ${absoluteDir}`);
+  }
+
+  if (!fs.statSync(absoluteDir).isDirectory()) {
+    throw new Error(`Path is not a directory: ${absoluteDir}`);
+  }
+
+  return absoluteDir;
+}
+
+async function getAnalyzer(directory: string): Promise<GraphAnalyzer> {
+  const normalizedDir = normalizeCacheKey(directory);
+  if (analyzerCache.has(normalizedDir)) {
+    return analyzerCache.get(normalizedDir)!;
+  }
+
+  const parser = new ProjectParser();
   const parseResult = await parser.parse(directory);
   const builder = new GraphBuilder();
   const { graph, nodes, edges } = builder.build(parseResult);
   const analyzer = new GraphAnalyzer(graph, parseResult, nodes, edges);
-  analyzerCache.set(directory, analyzer);
+  analyzerCache.set(normalizedDir, analyzer);
+  setLastScannedDirectory(normalizedDir);
   return analyzer;
+}
+
+function safeHandler(fn: () => Promise<{
+  content: Array<{ type: "text"; text: string }>;
+  structuredContent?: Record<string, unknown>;
+}>): Promise<{
+  content: Array<{ type: "text"; text: string }>;
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+}> {
+  return fn().then(
+    (result) => result,
+    (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{ type: "text", text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  );
 }
 
 export function registerTools(server: McpServer): void {
@@ -50,31 +98,37 @@ export function registerTools(server: McpServer): void {
       }),
     },
     async ({ directory }) => {
-      const parseResult = await parser.parse(directory);
-      // Clear old analyzer cache for this directory
-      analyzerCache.delete(directory);
+      return safeHandler(async () => {
+        const validatedDir = validateDirectory(directory);
+        const parser = new ProjectParser();
+        const parseResult = await parser.parse(validatedDir);
+        const builder = new GraphBuilder();
+        const { graph, nodes, edges } = builder.build(parseResult);
+        const analyzer = new GraphAnalyzer(graph, parseResult, nodes, edges);
+        analyzerCache.set(normalizeCacheKey(validatedDir), analyzer);
 
-      const output = {
-        directory: parseResult.directory,
-        totalFiles: parseResult.totalFiles,
-        totalFunctions: parseResult.totalFunctions,
-        totalClasses: parseResult.totalClasses,
-        totalImports: parseResult.totalImports,
-        totalExports: parseResult.totalExports,
-        files: parseResult.files.map(f => ({
-          relativePath: f.relativePath,
-          functionCount: f.functions.length,
-          classCount: f.classes.length,
-          importCount: f.imports.length,
-          exportCount: f.exports.length,
-          totalLines: f.totalLines,
-        })),
-      };
+        const output = {
+          directory: parseResult.directory,
+          totalFiles: parseResult.totalFiles,
+          totalFunctions: parseResult.totalFunctions,
+          totalClasses: parseResult.totalClasses,
+          totalImports: parseResult.totalImports,
+          totalExports: parseResult.totalExports,
+          files: parseResult.files.map(f => ({
+            relativePath: f.relativePath,
+            functionCount: f.functions.length,
+            classCount: f.classes.length,
+            importCount: f.imports.length,
+            exportCount: f.exports.length,
+            totalLines: f.totalLines,
+          })),
+        };
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
-        structuredContent: output,
-      };
+        return {
+          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+          structuredContent: output,
+        };
+      });
     }
   );
 
@@ -106,30 +160,44 @@ export function registerTools(server: McpServer): void {
       }),
     },
     async ({ name, directory, type }) => {
-      const analyzer = await getAnalyzer(directory);
-      const matches = analyzer.findFunction(name, type as "function" | "class" | "any");
+      return safeHandler(async () => {
+        const validatedDir = validateDirectory(directory);
+        const analyzer = await getAnalyzer(validatedDir);
+        const matches = analyzer.findFunction(name, type);
 
-      const callers: string[] = [];
-      const callees: string[] = [];
+        const callers: string[] = [];
+        const callees: string[] = [];
 
-      if (matches.length > 0) {
-        const firstMatch = matches[0];
-        const fileId = `file:${firstMatch.filePath}`;
-        callers.push(...analyzer.getCallers(fileId));
-        callees.push(...analyzer.getCallees(fileId));
-      }
+        for (const match of matches) {
+          const nodeId = match.kind === "class"
+            ? `class:${match.filePath}:${match.name}:${match.lineNumber}`
+            : `fn:${match.filePath}:${match.name}:${match.lineNumber}`;
+          const directCallers = analyzer.getCallers(nodeId);
+          const directCallees = analyzer.getCallees(nodeId);
+          if (directCallers.length > 0 || directCallees.length > 0) {
+            callers.push(...directCallers);
+            callees.push(...directCallees);
+          } else {
+            const fileId = `file:${match.filePath}`;
+            const fileCallers = analyzer.getCallers(fileId);
+            const fileCallees = analyzer.getCallees(fileId);
+            callers.push(...fileCallers.map((c: string) => `${c} (file-level)`));
+            callees.push(...fileCallees.map((c: string) => `${c} (file-level)`));
+          }
+        }
 
-      const output = {
-        matches,
-        callers: [...new Set(callers)],
-        callees: [...new Set(callees)],
-        totalMatches: matches.length,
-      };
+        const output = {
+          matches,
+          callers: [...new Set(callers)],
+          callees: [...new Set(callees)],
+          totalMatches: matches.length,
+        };
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
-        structuredContent: output,
-      };
+        return {
+          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+          structuredContent: output,
+        };
+      });
     }
   );
 
@@ -165,28 +233,59 @@ export function registerTools(server: McpServer): void {
       }),
     },
     async ({ directory, targetFile, format }) => {
-      const analyzer = await getAnalyzer(directory);
-      const nodes = analyzer.getNodes();
-      const edges = analyzer.getEdges();
-      const cycles = analyzer.detectCycles();
+      return safeHandler(async () => {
+        const validatedDir = validateDirectory(directory);
+        const analyzer = await getAnalyzer(validatedDir);
+        let nodes = analyzer.getNodes();
+        let edges = analyzer.getEdges();
+        let cycles: string[][] = [];
 
-      const output: Record<string, unknown> = {
-        format,
-        nodeCount: nodes.length,
-        edgeCount: edges.length,
-        nodes: nodes.map((n: GraphNode) => ({ id: n.id, kind: n.kind, label: n.label, filePath: n.filePath })),
-        edges: edges.map((e: GraphEdge) => ({ source: e.source, target: e.target, kind: e.kind, label: e.label })),
-        cycles,
-      };
+        if (targetFile) {
+          const matchingNodes = nodes.filter((n: GraphNode) => n.filePath.includes(targetFile) || n.label.includes(targetFile));
+          const matchingIds = new Set(matchingNodes.map((n: GraphNode) => n.id));
+          const expandedIds = new Set<string>(matchingIds);
+          for (const nodeId of matchingIds) {
+            for (const neighbor of analyzer.getGraph().inNeighbors(nodeId)) {
+              expandedIds.add(neighbor);
+            }
+            for (const neighbor of analyzer.getGraph().outNeighbors(nodeId)) {
+              expandedIds.add(neighbor);
+            }
+          }
+          const expandedNodeSet = new Set(expandedIds);
+          nodes = nodes.filter((n: GraphNode) => expandedNodeSet.has(n.id));
+          edges = edges.filter((e: GraphEdge) => expandedNodeSet.has(e.source) && expandedNodeSet.has(e.target));
+          cycles = [];
+        } else {
+          cycles = analyzer.detectCycles();
+        }
 
-      if (format === "mermaid") {
-        output.mermaid = analyzer.toMermaid(targetFile);
-      }
+         const output: {
+           format: "json" | "mermaid";
+           nodeCount: number;
+           edgeCount: number;
+           nodes: { id: string; kind: string; label: string; filePath: string }[];
+           edges: { source: string; target: string; kind: string; label: string }[];
+           cycles: string[][];
+           mermaid?: string;
+         } = {
+           format,
+           nodeCount: nodes.length,
+           edgeCount: edges.length,
+           nodes: nodes.map((n: GraphNode) => ({ id: n.id, kind: n.kind, label: n.label, filePath: n.filePath })),
+           edges: edges.map((e: GraphEdge) => ({ source: e.source, target: e.target, kind: e.kind, label: e.label })),
+           cycles,
+         };
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
-        structuredContent: output as Record<string, unknown>,
-      };
+        if (format === "mermaid") {
+          output.mermaid = analyzer.toMermaid(targetFile);
+        }
+
+         return {
+           content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+           structuredContent: output,
+         };
+      });
     }
   );
 
@@ -201,52 +300,57 @@ export function registerTools(server: McpServer): void {
         metric: z.enum(["inDegree", "outDegree", "betweenness"]).default("inDegree").describe("Centrality metric: inDegree (most depended upon), outDegree (most dependencies), betweenness (most on critical paths)"),
         topN: z.number().default(10).describe("Number of top results to return"),
       }),
-      outputSchema: z.object({
-        metric: z.string(),
-        ranked: z.array(z.object({
-          relativePath: z.string(),
-          score: z.number(),
-          functionCount: z.number(),
-          classCount: z.number(),
-          importCount: z.number(),
-        })),
-        recommendations: z.array(z.string()),
-      }),
+       outputSchema: z.object({
+         metric: z.string(),
+         ranked: z.array(z.object({
+           relativePath: z.string(),
+           score: z.number(),
+           functionCount: z.number(),
+           classCount: z.number(),
+           importCount: z.number(),
+           exportCount: z.number(),
+         })),
+         recommendations: z.array(z.string()),
+       }),
     },
     async ({ directory, metric, topN }) => {
-      const analyzer = await getAnalyzer(directory);
-      const ranked = analyzer.rankImpact(metric as "inDegree" | "outDegree" | "betweenness");
-      const top = ranked.slice(0, topN);
+      return safeHandler(async () => {
+        const validatedDir = validateDirectory(directory);
+        const analyzer = await getAnalyzer(validatedDir);
+        const ranked = analyzer.rankImpact(metric);
+        const top = ranked.slice(0, topN);
 
-      const recommendations: string[] = [];
-      if (top.length > 0) {
-        recommendations.push(`Most central file: ${top[0].relativePath} (score: ${top[0].score})`);
-        recommendations.push("This file is the most depended-upon module. Changes here will have the widest impact.");
-        if (top.length > 1) {
-          recommendations.push(`Second most central: ${top[1].relativePath} (score: ${top[1].score})`);
+        const recommendations: string[] = [];
+        if (top.length > 0) {
+          recommendations.push(`Most central file: ${top[0].relativePath} (score: ${top[0].score})`);
+          recommendations.push("This file is the most depended-upon module. Changes here will have the widest impact.");
+          if (top.length > 1) {
+            recommendations.push(`Second most central: ${top[1].relativePath} (score: ${top[1].score})`);
+          }
+          const leafNodes = ranked.filter((r: RankedFile) => r.score === 0).slice(0, 3);
+          if (leafNodes.length > 0) {
+            recommendations.push(`Leaf files (no dependents): ${leafNodes.map((l: RankedFile) => l.relativePath).join(", ")}`);
+          }
         }
-        const leafNodes = ranked.filter((r: RankedFile) => r.score === 0).slice(0, 3);
-        if (leafNodes.length > 0) {
-          recommendations.push(`Leaf files (no dependents): ${leafNodes.map((l: RankedFile) => l.relativePath).join(", ")}`);
-        }
-      }
 
-      const output = {
-        metric,
-        ranked: top.map((r: RankedFile) => ({
-          relativePath: r.relativePath,
-          score: r.score,
-          functionCount: r.functionCount,
-          classCount: r.classCount,
-          importCount: r.importCount,
-        })),
-        recommendations,
-      };
+        const output = {
+          metric,
+         ranked: top.map((r: RankedFile) => ({
+           relativePath: r.relativePath,
+           score: r.score,
+           functionCount: r.functionCount,
+           classCount: r.classCount,
+           importCount: r.importCount,
+           exportCount: r.exportCount,
+         })),
+          recommendations,
+        };
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
-        structuredContent: output,
-      };
+        return {
+          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+          structuredContent: output,
+        };
+      });
     }
   );
 
@@ -270,26 +374,29 @@ export function registerTools(server: McpServer): void {
       }),
     },
     async ({ from, to, directory }) => {
-      const analyzer = await getAnalyzer(directory);
-      const result = analyzer.traceCallChain(from, to);
+      return safeHandler(async () => {
+        const validatedDir = validateDirectory(directory);
+        const analyzer = await getAnalyzer(validatedDir);
+        const result = analyzer.traceCallChain(from, to);
 
-      const output = {
-        found: result.found,
-        from,
-        to,
-        paths: result.paths,
-        pathCount: result.paths.length,
-      };
+        const output = {
+          found: result.found,
+          from,
+          to,
+          paths: result.paths,
+          pathCount: result.paths.length,
+        };
 
-      return {
-        content: [{
-          type: "text",
-          text: result.found
-            ? `Found ${result.paths.length} path(s) from "${from}" to "${to}":\n${JSON.stringify(result.paths, null, 2)}`
-            : `No path found from "${from}" to "${to}". These symbols may not be connected in the dependency graph.`,
-        }],
-        structuredContent: output,
-      };
+        return {
+          content: [{
+            type: "text",
+            text: result.found
+              ? `Found ${result.paths.length} path(s) from "${from}" to "${to}":\n${JSON.stringify(result.paths, null, 2)}`
+              : `No path found from "${from}" to "${to}". These symbols may not be connected in the dependency graph.`,
+          }],
+          structuredContent: output,
+        };
+      });
     }
   );
 }

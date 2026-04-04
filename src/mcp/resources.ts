@@ -1,6 +1,8 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import { GraphNode, GraphEdge, RankedFile } from "../graph/types.js";
-import { analyzerCache } from "./cache.js";
+import { analyzerCache, getLastScannedDirectory } from "./cache.js";
+
+const rankCache = new Map<string, RankedFile[]>();
 
 export function registerResources(server: McpServer): void {
   // Resource 1: codebase://summary
@@ -26,7 +28,13 @@ export function registerResources(server: McpServer): void {
       for (const [directory, analyzer] of analyzerCache) {
         const nodes = analyzer.getNodes();
         const edges = analyzer.getEdges();
-        const ranked = analyzer.rankImpact("inDegree");
+        let ranked: RankedFile[];
+        if (rankCache.has(directory)) {
+          ranked = rankCache.get(directory)!;
+        } else {
+          ranked = analyzer.rankImpact("inDegree");
+          rankCache.set(directory, ranked);
+        }
         const cycles = analyzer.detectCycles();
 
         const fileNodes = nodes.filter((n: GraphNode) => n.kind === "file");
@@ -83,9 +91,24 @@ export function registerResources(server: McpServer): void {
         };
       }
 
-      // Use the most recently added analyzer
-      const lastKey = Array.from(analyzerCache.keys()).pop()!;
-      const analyzer = analyzerCache.get(lastKey)!;
+      const lastKey = getLastScannedDirectory();
+      if (!lastKey) {
+        return {
+          contents: [{
+            uri: uri.href,
+            text: JSON.stringify({ message: "No codebase has been scanned yet. Use the scan_codebase tool first." }, null, 2),
+          }],
+        };
+      }
+      const analyzer = analyzerCache.get(lastKey);
+      if (!analyzer) {
+        return {
+          contents: [{
+            uri: uri.href,
+            text: JSON.stringify({ message: "Analyzer not found for the most recently scanned codebase." }, null, 2),
+          }],
+        };
+      }
       const nodes = analyzer.getNodes();
       const edges = analyzer.getEdges();
 

@@ -1,18 +1,26 @@
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const Graph = require("graphology");
+const Graph: typeof import("graphology").default = require("graphology");
+import type { AbstractGraph, Attributes } from "graphology-types";
 import { ParseResult } from "../parser/types.js";
 import { GraphNode, GraphEdge } from "./types.js";
 
+type CodeGraph = AbstractGraph<Attributes, Attributes, Attributes>;
 
 export class GraphBuilder {
-  build(parseResult: ParseResult): { graph: any; nodes: GraphNode[]; edges: GraphEdge[] } {
+  build(parseResult: ParseResult): { graph: CodeGraph; nodes: GraphNode[]; edges: GraphEdge[] } {
     const graph = new Graph({ multi: true });
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
 
-    // Track file node IDs
+    const classLookup = new Map<string, { filePath: string; name: string; lineNumber: number }>();
+    for (const fileInfo of parseResult.files) {
+      for (const cls of fileInfo.classes) {
+        classLookup.set(cls.name, { filePath: fileInfo.filePath, name: cls.name, lineNumber: cls.lineNumber });
+      }
+    }
+
     const fileNodeIds = new Map<string, string>();
 
     // Phase 1: Create file nodes
@@ -70,7 +78,7 @@ export class GraphBuilder {
       }
 
       for (const cls of fileInfo.classes) {
-        const clsId = `class:${fileInfo.filePath}:${cls.name}`;
+        const clsId = `class:${fileInfo.filePath}:${cls.name}:${cls.lineNumber}`;
         graph.addNode(clsId, {
           kind: "class",
           label: cls.name,
@@ -136,14 +144,14 @@ export class GraphBuilder {
     // Phase 4: Build extends/implements edges for classes
     for (const fileInfo of parseResult.files) {
       for (const cls of fileInfo.classes) {
-        const clsId = `class:${fileInfo.filePath}:${cls.name}`;
+        const clsId = `class:${fileInfo.filePath}:${cls.name}:${cls.lineNumber}`;
 
         if (cls.extends) {
           // Try to find the parent class in the codebase
           const parentName = cls.extends.split("<")[0].trim(); // Handle generics
-          const parentClass = this.findClassByName(parentName, parseResult);
+          const parentClass = this.findClassByName(parentName, parseResult, classLookup);
           if (parentClass) {
-            const parentId = `class:${parentClass.filePath}:${parentClass.name}`;
+            const parentId = `class:${parentClass.filePath}:${parentClass.name}:${parentClass.lineNumber}`;
             if (graph.hasNode(parentId)) {
               graph.addEdge(clsId, parentId, {
                 kind: "extends",
@@ -161,9 +169,9 @@ export class GraphBuilder {
 
         for (const impl of cls.implements) {
           const implName = impl.split("<")[0].trim();
-          const implClass = this.findClassByName(implName, parseResult);
+          const implClass = this.findClassByName(implName, parseResult, classLookup);
           if (implClass) {
-            const implId = `class:${implClass.filePath}:${implClass.name}`;
+            const implId = `class:${implClass.filePath}:${implClass.name}:${implClass.lineNumber}`;
             if (graph.hasNode(implId)) {
               graph.addEdge(clsId, implId, {
                 kind: "implements",
@@ -203,20 +211,24 @@ export class GraphBuilder {
     const fromDir = fromFile.replace(/\\/g, "/").replace(/\/[^/]+$/, "");
     const parts = [...(fromDir === "" ? [] : fromDir.split("/")), ...specifier.split("/")];
     const resolved: string[] = [];
-    for (const part of parts) {
-      if (part === "..") {
-        resolved.pop();
-      } else if (part !== "." && part !== "") {
-        resolved.push(part);
-      }
-    }
-    // Reconstruct with the drive prefix if present
-    let resolvedPath = resolved.join("/");
-    // If original fromFile had a Windows drive letter, preserve it
-    const driveMatch = fromFile.match(/^([A-Za-z]:\/)/);
-    if (driveMatch && !resolvedPath.startsWith(driveMatch[1])) {
-      resolvedPath = driveMatch[1] + resolvedPath;
-    }
+     for (const part of parts) {
+       if (part === "..") {
+         if (resolved.length > 0) {
+           resolved.pop();
+         }
+         // else: excessive ".." — ignore, prevents escaping root
+       } else if (part !== "." && part !== "") {
+         resolved.push(part);
+       }
+     }
+     // Reconstruct with the drive prefix if present
+     let resolvedPath = resolved.join("/");
+     // If original fromFile had a Windows drive letter, preserve it
+     const fromFileNormalized = fromFile.replace(/\\/g, "/");
+     const driveMatch = fromFileNormalized.match(/^([A-Za-z]:\/)/);
+     if (driveMatch && !resolvedPath.startsWith(driveMatch[1])) {
+       resolvedPath = driveMatch[1] + "/" + resolvedPath;
+     }
 
     // Try exact match first
     if (parseResult.files.some(f => f.filePath === resolvedPath)) {
@@ -235,14 +247,7 @@ export class GraphBuilder {
     return null;
   }
 
-  private findClassByName(name: string, parseResult: ParseResult): { filePath: string; name: string } | null {
-    for (const file of parseResult.files) {
-      for (const cls of file.classes) {
-        if (cls.name === name) {
-          return { filePath: file.filePath, name: cls.name };
-        }
-      }
-    }
-    return null;
+  private findClassByName(name: string, _parseResult: ParseResult, classLookup: Map<string, { filePath: string; name: string; lineNumber: number }>): { filePath: string; name: string; lineNumber: number } | null {
+    return classLookup.get(name) ?? null;
   }
 }

@@ -22,6 +22,7 @@ export interface RankedFile {
   functionCount: number;
   classCount: number;
   importCount: number;
+  exportCount: number;
 }
 
 export interface FunctionMatch {

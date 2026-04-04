@@ -21,7 +21,7 @@ export class FileAnalyzer {
       classes: this.extractClasses(sourceFile),
       imports: this.extractImports(sourceFile),
       exports: this.extractExports(sourceFile),
-      totalLines: sourceFile.getEndLineNumber(),
+      totalLines: sourceFile.getEndLineNumber() ?? 0,
     };
   }
 
@@ -49,19 +49,20 @@ export class FileAnalyzer {
         return `${paramName}: ${paramType}`;
       });
       const returnType = fn.getReturnTypeNode()?.getText() ?? "void";
-      const body = fn.getBody()?.getText().slice(0, 200) ?? "";
+       const body = fn.getBody()?.getText() ?? "";
+       const truncatedBody = [...body].slice(0, 200).join("");
 
-      return {
-        name,
-        filePath: sourceFile.getFilePath(),
-        lineNumber: fn.getStartLineNumber(),
-        parameters: params,
-        returnType,
-        isAsync: fn.isAsync(),
-        isExported: fn.isExported(),
-        isDefaultExport: fn.isDefaultExport(),
-        body,
-      };
+       return {
+         name,
+         filePath: sourceFile.getFilePath(),
+         lineNumber: fn.getStartLineNumber(),
+         parameters: params,
+         returnType,
+         isAsync: fn.isAsync(),
+         isExported: fn.isExported(),
+         isDefaultExport: fn.isDefaultExport(),
+         body: truncatedBody,
+       };
     });
   }
 
@@ -160,6 +161,50 @@ export class FileAnalyzer {
       }
     });
 
-    return exports;
+    sourceFile.getVariableStatements().forEach(stmt => {
+      if (stmt.isExported()) {
+        stmt.getDeclarations().forEach(decl => {
+          exports.push({
+            name: decl.getName(),
+            kind: "variable" as const,
+            isDefault: stmt.isDefaultExport(),
+            filePath: sourceFile.getFilePath(),
+            lineNumber: stmt.getStartLineNumber(),
+          });
+        });
+      }
+    });
+
+    sourceFile.getTypeAliases().forEach(ta => {
+      if (ta.isExported()) {
+        exports.push({
+          name: ta.getName(),
+          kind: "type" as const,
+          isDefault: ta.isDefaultExport(),
+          filePath: sourceFile.getFilePath(),
+          lineNumber: ta.getStartLineNumber(),
+        });
+      }
+    });
+
+    sourceFile.getInterfaces().forEach(iface => {
+      if (iface.isExported()) {
+        exports.push({
+          name: iface.getName(),
+          kind: "interface" as const,
+          isDefault: iface.isDefaultExport(),
+          filePath: sourceFile.getFilePath(),
+          lineNumber: iface.getStartLineNumber(),
+        });
+      }
+    });
+
+    const seen = new Set<string>();
+    return exports.filter(exp => {
+      const key = `${exp.name}|${exp.kind}|${exp.lineNumber}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 }

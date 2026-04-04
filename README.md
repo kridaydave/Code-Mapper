@@ -1,4 +1,4 @@
-# Codebase Cartographer
+# CodeGraph
 
 An MCP server that uses AST parsing to map TypeScript/JavaScript codebase structure and expose codebase intelligence for AI assistants.
 
