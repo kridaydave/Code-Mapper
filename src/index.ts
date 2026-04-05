@@ -8,12 +8,12 @@ import { registerResources } from "./mcp/resources.js";
 async function main() {
   const server = new McpServer(
      {
-       name: "CodeGraph",
+       name: "code-mapper",
        version: "1.0.0",
      },
      {
        instructions:
-         "CodeGraph analyzes TypeScript/JavaScript codebases using AST parsing. " +
+         "CodeMapper analyzes TypeScript/JavaScript codebases using AST parsing. " +
          "Always start by calling scan_codebase with the target directory. " +
          "Then use find_function to locate symbols, analyze_dependencies to see the graph, " +
          "rank_impact to find central files, or trace_call_chain to follow dependency paths. " +
@@ -29,7 +29,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  console.error("Codebase Cartographer MCP server running on stdio");
+  console.error("CodeMapper MCP server running on stdio");
 }
 
 main().catch((error) => {

@@ -1,11 +1,11 @@
 {
-  "name": "CodeGraph",
+  "name": "@kridaydave/code-mapper",
   "version": "1.0.0",
-  "description": "MCP server for codebase mapping and analysis",
+  "description": "MCP server for codebase mapping and analysis with graph visualization",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "CodeGraph": "./dist/index.js"
+    "code-mapper": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
