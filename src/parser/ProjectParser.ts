@@ -15,7 +15,12 @@ const IGNORE_PATTERNS = [
   /\.svelte-kit/,
   /__tests__/,
   /\.cache/,
+  /^\.env$/,
+  /credentials\.json/,
+  /^secrets\./,
 ];
+
+const MAX_FILES = 10000;
 
 export class ProjectParser {
   private project: Project;
@@ -47,6 +52,10 @@ export class ProjectParser {
     }
 
     const files = this.findFiles(absoluteDir);
+
+    if (files.length > MAX_FILES) {
+      throw new Error(`Too many files (${files.length}). Maximum allowed: ${MAX_FILES}. Consider scanning a subdirectory.`);
+    }
 
     if (files.length === 0) {
       const empty: ParseResult = {
@@ -107,11 +116,11 @@ export class ProjectParser {
         const fullPath = join(dir, entry.name);
 
         if (entry.isDirectory()) {
-          if (!IGNORE_PATTERNS.some(pattern => pattern.test(entry.name))) {
+          if (!IGNORE_PATTERNS.some(pattern => pattern.test(fullPath))) {
             walk(fullPath);
           }
         } else if (entry.isFile()) {
-          if (/\.(ts|tsx|js|jsx)$/.test(entry.name)) {
+          if (/\.(ts|tsx|js|jsx|mts|mjs|mcts|cjs|cts)$/i.test(entry.name)) {
             results.push(fullPath);
           }
         }

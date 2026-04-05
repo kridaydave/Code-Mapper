@@ -6,14 +6,18 @@ import { ProjectParser } from "../parser/ProjectParser.js";
 import { GraphBuilder } from "../graph/GraphBuilder.js";
 import { GraphAnalyzer } from "../graph/GraphAnalyzer.js";
 import { GraphNode, GraphEdge, RankedFile } from "../graph/types.js";
-import { analyzerCache, normalizeCacheKey, clearAnalyzerCache, setLastScannedDirectory } from "./cache.js";
+import { analyzerCache, normalizeCacheKey, clearAnalyzerCache, setLastScannedDirectory, getAnalyzerFromCache, setAnalyzerInCache, getPendingAnalyzer, setPendingAnalyzer } from "./cache.js";
 
 const BLOCKED_PATHS = [
   /^c:\\windows/i,
   /^c:\\program files/i,
+  /^c:\\programdata/i,
   /^\/etc\//i,
   /^\/usr\//i,
   /^\/var\//i,
+  /^\/system volumes/i,
+  /^\/private\//i,
+  /^\\\\\?\\/i,
 ];
 
 function validateDirectory(directory: string): string {
@@ -36,18 +40,29 @@ function validateDirectory(directory: string): string {
 
 async function getAnalyzer(directory: string): Promise<GraphAnalyzer> {
   const normalizedDir = normalizeCacheKey(directory);
-  if (analyzerCache.has(normalizedDir)) {
-    return analyzerCache.get(normalizedDir)!;
+  const cached = getAnalyzerFromCache(normalizedDir);
+  if (cached) {
+    return cached;
   }
 
-  const parser = new ProjectParser();
-  const parseResult = await parser.parse(directory);
-  const builder = new GraphBuilder();
-  const { graph, nodes, edges } = builder.build(parseResult);
-  const analyzer = new GraphAnalyzer(graph, parseResult, nodes, edges);
-  analyzerCache.set(normalizedDir, analyzer);
-  setLastScannedDirectory(normalizedDir);
-  return analyzer;
+  const pending = getPendingAnalyzer(normalizedDir);
+  if (pending) {
+    return pending;
+  }
+
+  const analyzerPromise = (async () => {
+    const parser = new ProjectParser();
+    const parseResult = await parser.parse(directory);
+    const builder = new GraphBuilder();
+    const { graph, nodes, edges } = builder.build(parseResult);
+    const analyzer = new GraphAnalyzer(graph, parseResult, nodes, edges);
+    setAnalyzerInCache(normalizedDir, analyzer);
+    setLastScannedDirectory(normalizedDir);
+    return analyzer;
+  })();
+
+  setPendingAnalyzer(normalizedDir, analyzerPromise);
+  return analyzerPromise;
 }
 
 function safeHandler(fn: () => Promise<{
@@ -98,14 +113,10 @@ export function registerTools(server: McpServer): void {
       }),
     },
     async ({ directory }) => {
-      return safeHandler(async () => {
+      return await safeHandler(async () => {
         const validatedDir = validateDirectory(directory);
-        const parser = new ProjectParser();
-        const parseResult = await parser.parse(validatedDir);
-        const builder = new GraphBuilder();
-        const { graph, nodes, edges } = builder.build(parseResult);
-        const analyzer = new GraphAnalyzer(graph, parseResult, nodes, edges);
-        analyzerCache.set(normalizeCacheKey(validatedDir), analyzer);
+        const analyzer = await getAnalyzer(validatedDir);
+        const parseResult = analyzer.getParseResult();
 
         const output = {
           directory: parseResult.directory,
@@ -160,7 +171,7 @@ export function registerTools(server: McpServer): void {
       }),
     },
     async ({ name, directory, type }) => {
-      return safeHandler(async () => {
+      return await safeHandler(async () => {
         const validatedDir = validateDirectory(directory);
         const analyzer = await getAnalyzer(validatedDir);
         const matches = analyzer.findFunction(name, type);
@@ -233,7 +244,7 @@ export function registerTools(server: McpServer): void {
       }),
     },
     async ({ directory, targetFile, format }) => {
-      return safeHandler(async () => {
+      return await safeHandler(async () => {
         const validatedDir = validateDirectory(directory);
         const analyzer = await getAnalyzer(validatedDir);
         let nodes = analyzer.getNodes();
@@ -241,6 +252,7 @@ export function registerTools(server: McpServer): void {
         let cycles: string[][] = [];
 
         if (targetFile) {
+          const sanitizedTarget = targetFile.replace(/[\/\\]/g, "").replace(/\.\./g, ".");
           const matchingNodes = nodes.filter((n: GraphNode) => n.filePath.includes(targetFile) || n.label.includes(targetFile));
           const matchingIds = new Set(matchingNodes.map((n: GraphNode) => n.id));
           const expandedIds = new Set<string>(matchingIds);
@@ -314,7 +326,7 @@ export function registerTools(server: McpServer): void {
        }),
     },
     async ({ directory, metric, topN }) => {
-      return safeHandler(async () => {
+      return await safeHandler(async () => {
         const validatedDir = validateDirectory(directory);
         const analyzer = await getAnalyzer(validatedDir);
         const ranked = analyzer.rankImpact(metric);
@@ -374,7 +386,7 @@ export function registerTools(server: McpServer): void {
       }),
     },
     async ({ from, to, directory }) => {
-      return safeHandler(async () => {
+      return await safeHandler(async () => {
         const validatedDir = validateDirectory(directory);
         const analyzer = await getAnalyzer(validatedDir);
         const result = analyzer.traceCallChain(from, to);

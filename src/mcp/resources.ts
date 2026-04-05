@@ -1,7 +1,8 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import { GraphNode, GraphEdge, RankedFile } from "../graph/types.js";
-import { analyzerCache, getLastScannedDirectory } from "./cache.js";
+import { analyzerCache, getLastScannedDirectory, getAnalyzerFromCache } from "./cache.js";
 
+const RANK_CACHE_LIMIT = 100;
 const rankCache = new Map<string, RankedFile[]>();
 
 export function registerResources(server: McpServer): void {
@@ -25,7 +26,8 @@ export function registerResources(server: McpServer): void {
       }
 
       const summaries: Record<string, unknown>[] = [];
-      for (const [directory, analyzer] of analyzerCache) {
+      for (const [directory, entry] of analyzerCache) {
+        const analyzer = entry.analyzer;
         const nodes = analyzer.getNodes();
         const edges = analyzer.getEdges();
         let ranked: RankedFile[];
@@ -91,8 +93,8 @@ export function registerResources(server: McpServer): void {
         };
       }
 
-      const lastKey = getLastScannedDirectory();
-      if (!lastKey) {
+      const targetKey = getLastScannedDirectory();
+      if (!targetKey) {
         return {
           contents: [{
             uri: uri.href,
@@ -100,8 +102,8 @@ export function registerResources(server: McpServer): void {
           }],
         };
       }
-      const analyzer = analyzerCache.get(lastKey);
-      if (!analyzer) {
+      const entry = analyzerCache.get(targetKey);
+      if (!entry) {
         return {
           contents: [{
             uri: uri.href,
@@ -109,6 +111,7 @@ export function registerResources(server: McpServer): void {
           }],
         };
       }
+      const analyzer = entry.analyzer;
       const nodes = analyzer.getNodes();
       const edges = analyzer.getEdges();
 
@@ -117,7 +120,7 @@ export function registerResources(server: McpServer): void {
         content = analyzer.toMermaid();
       } else {
         content = JSON.stringify({
-          directory: lastKey,
+          directory: targetKey,
           nodes: nodes.map((n: GraphNode) => ({ id: n.id, kind: n.kind, label: n.label, filePath: n.filePath })),
           edges: edges.map((e: GraphEdge) => ({ source: e.source, target: e.target, kind: e.kind, label: e.label })),
         }, null, 2);

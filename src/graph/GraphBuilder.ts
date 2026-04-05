@@ -17,7 +17,7 @@ export class GraphBuilder {
     const classLookup = new Map<string, { filePath: string; name: string; lineNumber: number }>();
     for (const fileInfo of parseResult.files) {
       for (const cls of fileInfo.classes) {
-        classLookup.set(cls.name, { filePath: fileInfo.filePath, name: cls.name, lineNumber: cls.lineNumber });
+        classLookup.set(fileInfo.filePath + "::" + cls.name, { filePath: fileInfo.filePath, name: cls.name, lineNumber: cls.lineNumber });
       }
     }
 
@@ -68,13 +68,6 @@ export class GraphBuilder {
           filePath: fileInfo.filePath,
           lineNumber: fn.lineNumber,
         });
-
-        edges.push({
-          source: fileId,
-          target: fnId,
-          kind: "contains",
-          label: `contains ${fn.name}`,
-        });
       }
 
       for (const cls of fileInfo.classes) {
@@ -97,13 +90,6 @@ export class GraphBuilder {
           label: cls.name,
           filePath: fileInfo.filePath,
           lineNumber: cls.lineNumber,
-        });
-
-        edges.push({
-          source: fileId,
-          target: clsId,
-          kind: "contains",
-          label: `contains ${cls.name}`,
         });
       }
     }
@@ -226,9 +212,9 @@ export class GraphBuilder {
      // If original fromFile had a Windows drive letter, preserve it
      const fromFileNormalized = fromFile.replace(/\\/g, "/");
      const driveMatch = fromFileNormalized.match(/^([A-Za-z]:\/)/);
-     if (driveMatch && !resolvedPath.startsWith(driveMatch[1])) {
-       resolvedPath = driveMatch[1] + "/" + resolvedPath;
-     }
+      if (driveMatch && !resolvedPath.startsWith(driveMatch[1])) {
+        resolvedPath = driveMatch[1] + resolvedPath;
+      }
 
     // Try exact match first
     if (parseResult.files.some(f => f.filePath === resolvedPath)) {
@@ -248,6 +234,11 @@ export class GraphBuilder {
   }
 
   private findClassByName(name: string, _parseResult: ParseResult, classLookup: Map<string, { filePath: string; name: string; lineNumber: number }>): { filePath: string; name: string; lineNumber: number } | null {
-    return classLookup.get(name) ?? null;
+    for (const [_key, value] of classLookup) {
+      if (value.name === name) {
+        return value;
+      }
+    }
+    return null;
   }
 }

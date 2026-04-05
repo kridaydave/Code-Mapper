@@ -35,6 +35,11 @@ export class FileAnalyzer {
       i++;
     }
 
+    // Verify target is actually within base directory
+    if (i < baseParts.length) {
+      throw new Error(`Target path is not within base directory: ${target} not in ${base}`);
+    }
+
     const up = baseParts.length - i;
     const down = targetParts.slice(i);
     return [...Array(up).fill(".."), ...down].join("/");
@@ -112,7 +117,7 @@ export class FileAnalyzer {
         namedImports,
         defaultImport,
         namespaceImport,
-        moduleSpecifier: imp.getModuleSpecifierValue(),
+        moduleSpecifier: imp.getModuleSpecifierValue() ?? null,
         filePath: sourceFile.getFilePath(),
         lineNumber: imp.getStartLineNumber(),
       };
@@ -167,7 +172,7 @@ export class FileAnalyzer {
           exports.push({
             name: decl.getName(),
             kind: "variable" as const,
-            isDefault: stmt.isDefaultExport(),
+            isDefault: false,
             filePath: sourceFile.getFilePath(),
             lineNumber: stmt.getStartLineNumber(),
           });
@@ -180,7 +185,7 @@ export class FileAnalyzer {
         exports.push({
           name: ta.getName(),
           kind: "type" as const,
-          isDefault: ta.isDefaultExport(),
+          isDefault: false,
           filePath: sourceFile.getFilePath(),
           lineNumber: ta.getStartLineNumber(),
         });
@@ -192,7 +197,7 @@ export class FileAnalyzer {
         exports.push({
           name: iface.getName(),
           kind: "interface" as const,
-          isDefault: iface.isDefaultExport(),
+          isDefault: false,
           filePath: sourceFile.getFilePath(),
           lineNumber: iface.getStartLineNumber(),
         });

@@ -35,6 +35,10 @@ export class GraphAnalyzer {
     return this.edges;
   }
 
+  getParseResult(): ParseResult {
+    return this.parseResult;
+  }
+
   /**
    * Rank files by centrality metric
    */
@@ -45,16 +49,16 @@ export class GraphAnalyzer {
     if (metric === "betweenness") {
       const nodeCount = this.graph.order;
       if (nodeCount > 200) {
-        for (const node of fileNodes) {
-          scores.set(node.id, this.graph.inDegree(node.id));
-        }
+        metric = "inDegree";
       } else {
         const betweenness = centrality.betweenness(this.graph);
         for (const [node, score] of Object.entries(betweenness)) {
           scores.set(node, score as number);
         }
       }
-    } else if (metric === "inDegree") {
+    }
+
+    if (metric === "inDegree") {
       for (const node of fileNodes) {
         scores.set(node.id, this.graph.inDegree(node.id));
       }
@@ -270,6 +274,8 @@ export class GraphAnalyzer {
             if (cycleStart !== -1) {
               cycles.push([...path.slice(cycleStart), frame.node]);
             }
+            stackSet.delete(frame.node);
+            path.pop();
             workStack.pop();
             continue;
           }
@@ -277,12 +283,12 @@ export class GraphAnalyzer {
             workStack.pop();
             continue;
           }
-          visited.add(frame.node);
           stackSet.add(frame.node);
           path.push(frame.node);
         }
 
         if (frame.pathIndex < frame.neighbors.length) {
+          visited.add(frame.node);
           const neighbor = frame.neighbors[frame.pathIndex];
           frame.pathIndex++;
           workStack.push({
