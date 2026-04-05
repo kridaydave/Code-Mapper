@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
 import { ProjectParser } from "../parser/ProjectParser.js";
+import { Project } from "ts-morph";
+import { ComplexityAnalyzer, ComplexityResult } from "../parser/ComplexityAnalyzer.js";
 import { GraphBuilder } from "../graph/GraphBuilder.js";
 import { GraphAnalyzer } from "../graph/GraphAnalyzer.js";
 import { GraphNode, GraphEdge, RankedFile } from "../graph/types.js";
@@ -219,11 +221,11 @@ export function registerTools(server: McpServer): void {
     "analyze_dependencies",
     {
       title: "Analyze Dependencies",
-      description: "Returns the dependency graph between files. Can return the full graph or a subgraph for a specific file. Supports JSON and Mermaid output formats.",
+      description: "Returns the dependency graph between files. Can return the full graph or a subgraph for a specific file. Supports JSON, Mermaid, DOT, and PlantUML output formats.",
       inputSchema: z.object({
         directory: z.string().describe("Path to the codebase directory (must be scanned first)"),
         targetFile: z.string().optional().describe("Optional: filter to show only nodes related to this file"),
-        format: z.enum(["json", "mermaid"]).default("json").describe("Output format: json for data, mermaid for visual diagram"),
+        format: z.enum(["json", "mermaid", "dot", "plantuml"]).default("json").describe("Output format: json for data, mermaid/dot/plantuml for visual diagram"),
       }),
       outputSchema: z.object({
         format: z.string(),
@@ -243,6 +245,8 @@ export function registerTools(server: McpServer): void {
         })),
         cycles: z.array(z.array(z.string())),
         mermaid: z.string().optional(),
+        dot: z.string().optional(),
+        plantuml: z.string().optional(),
       }),
     },
     async ({ directory, targetFile, format }) => {
@@ -275,13 +279,15 @@ export function registerTools(server: McpServer): void {
         }
 
          const output: {
-           format: "json" | "mermaid";
+           format: "json" | "mermaid" | "dot" | "plantuml";
            nodeCount: number;
            edgeCount: number;
            nodes: { id: string; kind: string; label: string; filePath: string }[];
            edges: { source: string; target: string; kind: string; label: string }[];
            cycles: string[][];
            mermaid?: string;
+           dot?: string;
+           plantuml?: string;
          } = {
            format,
            nodeCount: nodes.length,
@@ -293,6 +299,10 @@ export function registerTools(server: McpServer): void {
 
         if (format === "mermaid") {
           output.mermaid = analyzer.toMermaid(targetFile);
+        } else if (format === "dot") {
+          output.dot = analyzer.toDot(targetFile);
+        } else if (format === "plantuml") {
+          output.plantuml = analyzer.toPlantUML(targetFile);
         }
 
          return {
@@ -311,7 +321,7 @@ export function registerTools(server: McpServer): void {
       description: "Ranks files by centrality to identify the most important/central files in the codebase. Use this to answer questions like 'Where should I add a new feature?' or 'Which files are most critical?'",
       inputSchema: z.object({
         directory: z.string().describe("Path to the codebase directory (must be scanned first)"),
-        metric: z.enum(["inDegree", "outDegree", "betweenness"]).default("inDegree").describe("Centrality metric: inDegree (most depended upon), outDegree (most dependencies), betweenness (most on critical paths)"),
+        metric: z.enum(["inDegree", "outDegree", "betweenness", "pagerank"]).default("inDegree").describe("Centrality metric: inDegree (most depended upon), outDegree (most dependencies), betweenness (most on critical paths), pagerank (most influential based on random walk)"),
         topN: z.number().default(10).describe("Number of top results to return"),
       }),
        outputSchema: z.object({
@@ -408,6 +418,109 @@ export function registerTools(server: McpServer): void {
               ? `Found ${result.paths.length} path(s) from "${from}" to "${to}":\n${JSON.stringify(result.paths, null, 2)}`
               : `No path found from "${from}" to "${to}". These symbols may not be connected in the dependency graph.`,
           }],
+          structuredContent: output,
+        };
+      });
+    }
+  );
+
+  // Tool 6: analyze_complexity
+  server.registerTool(
+    "analyze_complexity",
+    {
+      title: "Analyze Code Complexity",
+      description: "Analyze code complexity metrics for each file in the codebase. Identifies files that may need refactoring based on cyclomatic complexity, cognitive complexity, nesting depth, and size.",
+      inputSchema: z.object({
+        directory: z.string().describe("Path to the codebase directory (must be scanned first)"),
+        threshold: z.number().optional().describe("Minimum complexity score to report (0-100)"),
+        topN: z.number().default(10).describe("Number of most complex files to return"),
+      }),
+      outputSchema: z.object({
+        totalFiles: z.number(),
+        files: z.array(z.object({
+          relativePath: z.string(),
+          cyclomaticComplexity: z.number(),
+          cognitiveComplexity: z.number(),
+          nestingDepth: z.number(),
+          linesOfCode: z.number(),
+          functionCount: z.number(),
+          classCount: z.number(),
+          overallScore: z.number(),
+          issues: z.array(z.string()),
+        })),
+        summary: z.object({
+          avgComplexity: z.number(),
+          maxComplexity: z.number(),
+          filesNeedingRefactoring: z.number(),
+        }),
+      }),
+    },
+    async ({ directory, threshold, topN }) => {
+      return await safeHandler(async () => {
+        const validatedDir = validateDirectory(directory);
+        const parser = new ProjectParser();
+        const parseResult = await parser.parse(validatedDir);
+
+        const project = new Project({
+          skipAddingFilesFromTsConfig: true,
+          compilerOptions: {
+            allowJs: true,
+            checkJs: false,
+            noEmit: true,
+          },
+        });
+
+        const sourceFiles = project.getSourceFiles();
+        for (const sf of sourceFiles) {
+          project.removeSourceFile(sf);
+        }
+
+        const files = parseResult.files.map(f => f.filePath);
+        project.addSourceFilesAtPaths(files);
+
+        const complexityAnalyzer = new ComplexityAnalyzer(project, validatedDir);
+        const results = complexityAnalyzer.analyzeProject(parseResult);
+
+        const filteredResults = threshold
+          ? results.filter(r => r.overallScore >= threshold)
+          : results;
+
+        const sortedResults = filteredResults
+          .sort((a, b) => b.overallScore - a.overallScore)
+          .slice(0, topN);
+
+        const avgComplexity = results.length > 0
+          ? Math.round(results.reduce((sum, r) => sum + r.overallScore, 0) / results.length)
+          : 0;
+
+        const maxComplexity = results.length > 0
+          ? Math.max(...results.map(r => r.overallScore))
+          : 0;
+
+        const filesNeedingRefactoring = results.filter(r => r.overallScore >= 50).length;
+
+        const output = {
+          totalFiles: results.length,
+          files: sortedResults.map(r => ({
+            relativePath: r.relativePath,
+            cyclomaticComplexity: r.cyclomaticComplexity,
+            cognitiveComplexity: r.cognitiveComplexity,
+            nestingDepth: r.nestingDepth,
+            linesOfCode: r.linesOfCode,
+            functionCount: r.functionCount,
+            classCount: r.classCount,
+            overallScore: r.overallScore,
+            issues: r.issues,
+          })),
+          summary: {
+            avgComplexity,
+            maxComplexity,
+            filesNeedingRefactoring,
+          },
+        };
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
           structuredContent: output,
         };
       });

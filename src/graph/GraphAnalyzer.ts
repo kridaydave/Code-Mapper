@@ -5,10 +5,24 @@ const Graph: typeof import("graphology").default = require("graphology");
 import type { AbstractGraph, Attributes } from "graphology-types";
 import * as shortestPath from "graphology-shortest-path";
 import { centrality } from "graphology-metrics";
+import pagerank from "graphology-metrics/centrality/pagerank";
 import { ParseResult } from "../parser/types.js";
 import { GraphNode, GraphEdge, RankedFile, FunctionMatch, CallChainResult } from "./types.js";
 
 type CodeGraph = AbstractGraph<Attributes, Attributes, Attributes>;
+
+export type ExportFormat = "json" | "mermaid" | "dot" | "plantuml";
+
+export interface ComplexityResult {
+  filePath: string;
+  relativePath: string;
+  cyclomaticComplexity: number;
+  linesOfCode: number;
+  functionCount: number;
+  classCount: number;
+  nestingDepth: number;
+  cognitiveComplexity: number;
+}
 
 export class GraphAnalyzer {
   private graph: CodeGraph;
@@ -42,7 +56,7 @@ export class GraphAnalyzer {
   /**
    * Rank files by centrality metric
    */
-  rankImpact(metric: "inDegree" | "outDegree" | "betweenness" = "inDegree"): RankedFile[] {
+  rankImpact(metric: "inDegree" | "outDegree" | "betweenness" | "pagerank" = "inDegree"): RankedFile[] {
     const fileNodes = this.nodes.filter((n: GraphNode) => n.kind === "file");
     const scores = new Map<string, number>();
 
@@ -58,7 +72,12 @@ export class GraphAnalyzer {
       }
     }
 
-    if (metric === "inDegree") {
+    if (metric === "pagerank") {
+      const ranks = pagerank(this.graph);
+      for (const [node, score] of Object.entries(ranks)) {
+        scores.set(node, score as number);
+      }
+    } else if (metric === "inDegree") {
       for (const node of fileNodes) {
         scores.set(node.id, this.graph.inDegree(node.id));
       }
@@ -241,6 +260,172 @@ export class GraphAnalyzer {
     }
 
     return lines.join("\n");
+  }
+
+  /**
+   * Generate a DOT (Graphviz) graph diagram string
+   */
+  toDot(targetFile?: string): string {
+    const lines: string[] = [
+      "digraph codegraph {",
+      "  rankdir=LR;",
+      "  node [fontname=\"Helvetica\"];",
+      "  edge [fontname=\"Helvetica\"];",
+    ];
+
+    const nodesToInclude = targetFile
+      ? this.nodes.filter((n: GraphNode) => {
+          const lowerTarget = targetFile.toLowerCase().replace(/\\/g, "/");
+          const lowerPath = n.filePath.toLowerCase().replace(/\\/g, "/");
+          const basename = lowerPath.split("/").pop() ?? "";
+          return basename.includes(lowerTarget) ||
+                 lowerPath.split("/").some(seg => seg.includes(lowerTarget));
+        })
+      : this.nodes;
+
+    const nodeIds = new Set(nodesToInclude.map((n: GraphNode) => n.id));
+
+    for (const node of nodesToInclude) {
+      const safeId = this.sanitizeId(node.id);
+      const safeLabel = this.sanitizeDotText(node.label);
+      let shape: string;
+      let fillcolor: string;
+
+      switch (node.kind) {
+        case "file":
+          shape = "box";
+          fillcolor = "lightblue";
+          break;
+        case "function":
+          shape = "ellipse";
+          fillcolor = "lightgreen";
+          break;
+        case "class":
+          shape = "box3d";
+          fillcolor = "lightyellow";
+          break;
+        default:
+          shape = "ellipse";
+          fillcolor = "lightgray";
+      }
+
+      lines.push(`  "${safeId}" [label="${safeLabel}" shape=${shape} style=filled fillcolor="${fillcolor}"];`);
+    }
+
+    for (const edge of this.edges) {
+      if (nodeIds.has(edge.source) && nodeIds.has(edge.target)) {
+        const sourceId = this.sanitizeId(edge.source);
+        const targetId = this.sanitizeId(edge.target);
+        let style: string;
+        let color: string;
+
+        switch (edge.kind) {
+          case "imports":
+            style = "solid";
+            color = "black";
+            break;
+          case "contains":
+            style = "dotted";
+            color = "gray";
+            break;
+          case "extends":
+            style = "dashed";
+            color = "blue";
+            break;
+          case "implements":
+            style = "dashed";
+            color = "green";
+            break;
+          default:
+            style = "solid";
+            color = "black";
+        }
+
+        lines.push(`  "${sourceId}" -> "${targetId}" [style=${style} color="${color}"];`);
+      }
+    }
+
+    lines.push("}");
+    return lines.join("\n");
+  }
+
+  /**
+   * Generate a PlantUML graph diagram string
+   */
+  toPlantUML(targetFile?: string): string {
+    const lines: string[] = [
+      "@startuml",
+      "skinparam linetype ortho",
+    ];
+
+    const nodesToInclude = targetFile
+      ? this.nodes.filter((n: GraphNode) => {
+          const lowerTarget = targetFile.toLowerCase().replace(/\\/g, "/");
+          const lowerPath = n.filePath.toLowerCase().replace(/\\/g, "/");
+          const basename = lowerPath.split("/").pop() ?? "";
+          return basename.includes(lowerTarget) ||
+                 lowerPath.split("/").some(seg => seg.includes(lowerTarget));
+        })
+      : this.nodes;
+
+    const nodeIds = new Set(nodesToInclude.map((n: GraphNode) => n.id));
+
+    for (const node of nodesToInclude) {
+      const safeId = this.sanitizeId(node.id);
+      const safeLabel = this.sanitizePlantUMLText(`${node.kind}: ${node.label}`);
+
+      switch (node.kind) {
+        case "file":
+          lines.push(`[${safeLabel}] as ${safeId}`);
+          break;
+        case "function":
+          lines.push(`() "${safeLabel}" as ${safeId}`);
+          break;
+        case "class":
+          lines.push(`interface "${safeLabel}" as ${safeId}`);
+          break;
+        default:
+          lines.push(`[${safeLabel}] as ${safeId}`);
+      }
+    }
+
+    for (const edge of this.edges) {
+      if (nodeIds.has(edge.source) && nodeIds.has(edge.target)) {
+        const sourceId = this.sanitizeId(edge.source);
+        const targetId = this.sanitizeId(edge.target);
+        let arrow: string;
+
+        switch (edge.kind) {
+          case "imports":
+            arrow = "-->";
+            break;
+          case "contains":
+            arrow = "*--";
+            break;
+          case "extends":
+            arrow = "--|>";
+            break;
+          case "implements":
+            arrow = "..|>";
+            break;
+          default:
+            arrow = "-->";
+        }
+
+        lines.push(`${sourceId} ${arrow} ${targetId}`);
+      }
+    }
+
+    lines.push("@enduml");
+    return lines.join("\n");
+  }
+
+  private sanitizeDotText(text: string): string {
+    return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+  }
+
+  private sanitizePlantUMLText(text: string): string {
+    return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
   }
 
   /**

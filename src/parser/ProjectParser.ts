@@ -22,6 +22,22 @@ const IGNORE_PATTERNS = [
 
 const MAX_FILES = 10000;
 
+export interface ProgressInfo {
+  phase: "scanning" | "parsing" | "analyzing";
+  current: number;
+  total: number;
+  currentFile?: string;
+  percentComplete: number;
+}
+
+export type ProgressCallback = (progress: ProgressInfo) => void;
+
+export interface ParseOptions {
+  directory: string;
+  onProgress?: ProgressCallback;
+  maxFiles?: number;
+}
+
 export class ProjectParser {
   private project: Project;
   private cache: Map<string, ParseResult> = new Map();
@@ -37,8 +53,10 @@ export class ProjectParser {
     });
   }
 
-  async parse(directory: string): Promise<ParseResult> {
+  async parse(directory: string, options?: ParseOptions): Promise<ParseResult> {
     const absoluteDir = resolve(directory);
+    const onProgress = options?.onProgress;
+    const maxFiles = options?.maxFiles ?? MAX_FILES;
 
     if (!fs.existsSync(absoluteDir)) {
       throw new Error(`Directory does not exist: ${absoluteDir}`);
@@ -51,10 +69,14 @@ export class ProjectParser {
       return this.cache.get(absoluteDir)!;
     }
 
+    if (onProgress) {
+      onProgress({ phase: "scanning", current: 0, total: 0, percentComplete: 0 });
+    }
+
     const files = this.findFiles(absoluteDir);
 
-    if (files.length > MAX_FILES) {
-      throw new Error(`Too many files (${files.length}). Maximum allowed: ${MAX_FILES}. Consider scanning a subdirectory.`);
+    if (files.length > maxFiles) {
+      throw new Error(`Too many files (${files.length}). Maximum allowed: ${maxFiles}. Consider scanning a subdirectory.`);
     }
 
     if (files.length === 0) {
@@ -80,8 +102,21 @@ export class ProjectParser {
     const analyzer = new FileAnalyzer(this.project, absoluteDir);
 
     const fileInfos: FileInfo[] = [];
-    for (const sourceFile of this.project.getSourceFiles()) {
+    const total = files.length;
+    for (let i = 0; i < this.project.getSourceFiles().length; i++) {
+      const sourceFile = this.project.getSourceFiles()[i];
       fileInfos.push(analyzer.analyze(sourceFile));
+
+      if (onProgress) {
+        const currentFile = sourceFile.getFilePath();
+        onProgress({
+          phase: "parsing",
+          current: i + 1,
+          total,
+          currentFile,
+          percentComplete: Math.round(((i + 1) / total) * 100),
+        });
+      }
     }
 
     const result: ParseResult = {
@@ -93,6 +128,10 @@ export class ProjectParser {
       totalImports: fileInfos.reduce((sum, f) => sum + f.imports.length, 0),
       totalExports: fileInfos.reduce((sum, f) => sum + f.exports.length, 0),
     };
+
+    if (onProgress) {
+      onProgress({ phase: "analyzing", current: total, total, percentComplete: 100 });
+    }
 
     this.cache.set(absoluteDir, result);
     return result;
