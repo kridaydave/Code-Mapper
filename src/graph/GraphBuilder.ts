@@ -61,6 +61,13 @@ export class GraphBuilder {
           label: `contains ${fn.name}`,
         });
 
+        edges.push({
+          source: fileId,
+          target: fnId,
+          kind: "contains",
+          label: `contains ${fn.name}`,
+        });
+
         nodes.push({
           id: fnId,
           kind: "function",
@@ -80,6 +87,13 @@ export class GraphBuilder {
         });
 
         graph.addEdge(fileId, clsId, {
+          kind: "contains",
+          label: `contains ${cls.name}`,
+        });
+
+        edges.push({
+          source: fileId,
+          target: clsId,
           kind: "contains",
           label: `contains ${cls.name}`,
         });

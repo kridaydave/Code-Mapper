@@ -85,6 +85,8 @@ function safeHandler(fn: () => Promise<{
   );
 }
 
+export { validateDirectory, getAnalyzer, safeHandler, clearAnalyzerCache };
+
 export function registerTools(server: McpServer): void {
   // Tool 1: scan_codebase
   server.registerTool(
