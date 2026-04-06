@@ -48,7 +48,7 @@ const args = process.argv.slice(2);
 
 if (args.includes("--help") || args.includes("-h")) {
   log(`
-code-mapper v1.0.0
+code-mapper v1.0.1
 
 npx code-mapper              - start server
 npx code-mapper --setup      - setup wizard
@@ -58,7 +58,7 @@ npx code-mapper --version    - show version
 }
 
 if (args.includes("--version") || args.includes("-v")) {
-  log("1.0.0");
+  log("1.0.1");
   process.exit(0);
 }
 

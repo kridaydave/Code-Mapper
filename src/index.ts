@@ -63,7 +63,7 @@ const args = process.argv.slice(2);
 
 if (args.includes("--help") || args.includes("-h")) {
   log(`
-code-mapper v1.0.0
+code-mapper v1.0.1
 
 npx code-mapper      - start server
 npx code-mapper --setup  - setup wizard
@@ -72,7 +72,7 @@ npx code-mapper --setup  - setup wizard
 }
 
 if (args.includes("--version") || args.includes("-v")) {
-  log("1.0.0");
+  log("1.0.1");
   process.exit(0);
 }
 
@@ -100,7 +100,7 @@ if (args.includes("--setup") || args.includes("-s")) {
   const { registerResources } = await import("./mcp/resources.js");
 
   const server = new McpServer(
-    { name: "code-mapper", version: "1.0.0" },
+    { name: "code-mapper", version: "1.0.1" },
     { instructions: "CodeMapper analyzes TypeScript/JavaScript codebases. Start with scan_codebase." }
   );
 
