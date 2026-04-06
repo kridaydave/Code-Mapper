@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import * as fs from "node:fs";
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/server";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ProjectParser } from "../parser/ProjectParser.js";
 import { GraphBuilder } from "../graph/GraphBuilder.js";
 import { GraphAnalyzer } from "../graph/GraphAnalyzer.js";

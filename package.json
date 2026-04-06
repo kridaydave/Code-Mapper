@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "code-mapper": "./dist/index.js"
+    "code-mapper": "./bin/code-mapper.mjs"
   },
   "scripts": {
     "build": "tsc",
@@ -14,15 +14,39 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:cover": "vitest run --coverage"
+    "test:cover": "vitest run --coverage",
+    "setup": "node dist/tui/index.js",
+    "prepublishOnly": "npm run build"
   },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "code-mapper",
+    "code-analysis",
+    "typescript",
+    "graph-visualization"
+  ],
+  "author": "kridaydave",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kridaydave/code-mapper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kridaydave/code-mapper/issues"
+  },
+  "homepage": "https://github.com/kridaydave/code-mapper#readme",
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
-    "@modelcontextprotocol/server": "2.0.0-alpha.2",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@inquirer/prompts": "^8.2.0",
+    "chalk": "^5.6.2",
     "graphology": "^0.25.0",
     "graphology-metrics": "^2.4.0",
     "graphology-pagerank": "^1.1.0",
     "graphology-shortest-path": "^2.1.0",
+    "ink": "^5.2.1",
+    "react": "^19.2.4",
     "ts-morph": "^24.0.0",
     "zod": "^4.0.0"
   },
@@ -32,5 +56,27 @@
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

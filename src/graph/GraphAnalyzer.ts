@@ -2,10 +2,11 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Graph: typeof import("graphology").default = require("graphology");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pagerank = require("graphology-metrics/centrality/pagerank");
 import type { AbstractGraph, Attributes } from "graphology-types";
 import * as shortestPath from "graphology-shortest-path";
 import { centrality } from "graphology-metrics";
-import pagerank from "graphology-metrics/centrality/pagerank";
 import { ParseResult } from "../parser/types.js";
 import { GraphNode, GraphEdge, RankedFile, FunctionMatch, CallChainResult } from "./types.js";
 

@@ -1,4 +1,4 @@
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { GraphNode, GraphEdge, RankedFile } from "../graph/types.js";
 import { analyzerCache, getLastScannedDirectory, getAnalyzerFromCache } from "./cache.js";
 
