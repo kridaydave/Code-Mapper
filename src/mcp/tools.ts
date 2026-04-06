@@ -3,11 +3,10 @@ import * as fs from "node:fs";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
 import { ProjectParser } from "../parser/ProjectParser.js";
-import { Project } from "ts-morph";
-import { ComplexityAnalyzer, ComplexityResult } from "../parser/ComplexityAnalyzer.js";
 import { GraphBuilder } from "../graph/GraphBuilder.js";
 import { GraphAnalyzer } from "../graph/GraphAnalyzer.js";
 import { GraphNode, GraphEdge, RankedFile } from "../graph/types.js";
+import { ComplexityResult } from "../parser/ComplexityAnalyzer.js";
 import { analyzerCache, normalizeCacheKey, clearAnalyzerCache, setLastScannedDirectory, getAnalyzerFromCache, setAnalyzerInCache, getPendingAnalyzer, setPendingAnalyzer } from "./cache.js";
 
 const BLOCKED_PATHS = [
@@ -22,10 +21,6 @@ const BLOCKED_PATHS = [
   /^\\\\\?\\/i,
 ];
 
-/**
- * Validates that a directory path is safe and accessible.
- * Checks for existence, directory type, and blocked system paths.
- */
 function validateDirectory(directory: string): string {
   const absoluteDir = resolve(directory);
 
@@ -44,10 +39,6 @@ function validateDirectory(directory: string): string {
   return absoluteDir;
 }
 
-/**
- * Gets or creates a GraphAnalyzer for the given directory.
- * Uses caching to avoid re-parsing the same codebase.
- */
 async function getAnalyzer(directory: string): Promise<GraphAnalyzer> {
   const normalizedDir = normalizeCacheKey(directory);
   const cached = getAnalyzerFromCache(normalizedDir);
@@ -79,7 +70,51 @@ async function getAnalyzer(directory: string): Promise<GraphAnalyzer> {
  * Wraps MCP tool handlers to catch errors and return structured error responses.
  * Ensures all tool responses have consistent format regardless of success/failure.
  */
-function safeHandler(fn: () => Promise<{
+function getErrorMessage(error: Error): { message: string; errorCode: string } {
+  const msg = error.message;
+
+  if (msg.includes("does not exist")) {
+    return {
+      message: `${msg}. Please check that the path is correct and try again.`,
+      errorCode: "ERR_DIRECTORY_NOT_FOUND",
+    };
+  }
+
+  if (msg.includes("Too many files")) {
+    return {
+      message: `${msg}. Try scanning a subdirectory to reduce the file count.`,
+      errorCode: "ERR_TOO_MANY_FILES",
+    };
+  }
+
+  if (msg.includes("Path is not a directory")) {
+    return {
+      message: `${msg}. Please provide a directory path, not a file path.`,
+      errorCode: "ERR_NOT_A_DIRECTORY",
+    };
+  }
+
+  if (msg.includes("no TypeScript files") || msg.includes("No files found") || msg.includes("no files found")) {
+    return {
+      message: `${msg}. Ensure the directory contains TypeScript files and try again.`,
+      errorCode: "ERR_NO_FILES_FOUND",
+    };
+  }
+
+  if (msg.includes("Invalid regex pattern")) {
+    return {
+      message: `${msg}. Regex patterns must be valid JavaScript regular expressions.`,
+      errorCode: "ERR_INVALID_REGEX",
+    };
+  }
+
+  return {
+    message: msg,
+    errorCode: "ERR_UNKNOWN",
+  };
+}
+
+async function safeHandler(fn: () => Promise<{
   content: Array<{ type: "text"; text: string }>;
   structuredContent?: Record<string, unknown>;
 }>): Promise<{
@@ -87,24 +122,21 @@ function safeHandler(fn: () => Promise<{
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
 }> {
-  return fn().then(
-    (result) => result,
-    (error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        content: [{ type: "text", text: `Error: ${message}` }],
-        isError: true,
-      };
-    }
-  );
+  try {
+    return await fn();
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const result = getErrorMessage(error instanceof Error ? error : new Error(message));
+    return {
+      content: [{ type: "text", text: `Error: ${result.message}` }],
+      structuredContent: { errorCode: result.errorCode, message: result.message },
+      isError: true,
+    };
+  }
 }
 
 export { validateDirectory, getAnalyzer, safeHandler, clearAnalyzerCache };
 
-/**
- * Registers all MCP tools with the server.
- * Includes: scan_codebase, find_function, analyze_dependencies, rank_impact, trace_call_chain, analyze_complexity
- */
 export function registerTools(server: McpServer): void {
   // Tool 1: scan_codebase
   server.registerTool(
@@ -113,7 +145,7 @@ export function registerTools(server: McpServer): void {
       title: "Scan Codebase",
       description: "Scan a directory and return a summary of all files, functions, classes, and their relationships. Use this first before any other analysis.",
       inputSchema: z.object({
-        directory: z.string().min(1).max(500).describe("Path to the directory to scan (relative or absolute)"),
+        directory: z.string().min(1).describe("Path to the directory to scan (relative or absolute)"),
       }),
       outputSchema: z.object({
         directory: z.string(),
@@ -168,11 +200,12 @@ export function registerTools(server: McpServer): void {
     "find_function",
     {
       title: "Find Function or Class",
-      description: "Search for a function or class by name across the codebase. Returns location, signature, callers, and callees.",
+      description: "Search for a function or class by name across the codebase. Returns location, signature, callers, and callees. When useRegex is true, the name is treated as a case-insensitive regex pattern.",
       inputSchema: z.object({
-        name: z.string().min(1).max(200).describe("Name of the function or class to search for (case-insensitive partial match)"),
+        name: z.string().min(1).describe("Name of the function or class to search for"),
         directory: z.string().describe("Path to the codebase directory (must be scanned first)"),
         type: z.enum(["function", "class", "any"]).default("any").describe("Type of symbol to search for"),
+        useRegex: z.boolean().default(false).describe("Whether to treat name as a regex pattern (case-insensitive)"),
       }),
       outputSchema: z.object({
         matches: z.array(z.object({
@@ -190,11 +223,11 @@ export function registerTools(server: McpServer): void {
         totalMatches: z.number(),
       }),
     },
-    async ({ name, directory, type }) => {
+    async ({ name, directory, type, useRegex }) => {
       return await safeHandler(async () => {
         const validatedDir = validateDirectory(directory);
         const analyzer = await getAnalyzer(validatedDir);
-        const matches = analyzer.findFunction(name, type);
+        const matches = analyzer.findFunction(name, type, useRegex);
 
         const callers: string[] = [];
         const callees: string[] = [];
@@ -239,8 +272,8 @@ export function registerTools(server: McpServer): void {
       title: "Analyze Dependencies",
       description: "Returns the dependency graph between files. Can return the full graph or a subgraph for a specific file. Supports JSON, Mermaid, DOT, and PlantUML output formats.",
       inputSchema: z.object({
-        directory: z.string().min(1).max(500).describe("Path to the codebase directory (must be scanned first)"),
-        targetFile: z.string().max(200).optional().describe("Optional: filter to show only nodes related to this file"),
+        directory: z.string().min(1).describe("Path to the codebase directory (must be scanned first)"),
+        targetFile: z.string().optional().describe("Optional: filter to show only nodes related to this file"),
         format: z.enum(["json", "mermaid", "dot", "plantuml"]).default("json").describe("Output format: json for data, mermaid/dot/plantuml for visual diagram"),
       }),
       outputSchema: z.object({
@@ -339,9 +372,9 @@ export function registerTools(server: McpServer): void {
       title: "Rank Impact",
       description: "Ranks files by centrality to identify the most important/central files in the codebase. Use this to answer questions like 'Where should I add a new feature?' or 'Which files are most critical?'",
       inputSchema: z.object({
-        directory: z.string().min(1).max(500).describe("Path to the codebase directory (must be scanned first)"),
+        directory: z.string().min(1).describe("Path to the codebase directory (must be scanned first)"),
         metric: z.enum(["inDegree", "outDegree", "betweenness", "pagerank"]).default("inDegree").describe("Centrality metric: inDegree (most depended upon), outDegree (most dependencies), betweenness (most on critical paths), pagerank (most influential based on random walk)"),
-        topN: z.number().min(1).max(100).default(10).describe("Number of top results to return"),
+        topN: z.number().min(1).default(10).describe("Number of top results to return"),
       }),
        outputSchema: z.object({
          metric: z.string(),
@@ -378,14 +411,15 @@ export function registerTools(server: McpServer): void {
 
         const output = {
           metric,
-         ranked: top.map((r: RankedFile) => ({
-           relativePath: r.relativePath,
-           score: r.score,
-           functionCount: r.functionCount,
-           classCount: r.classCount,
-           importCount: r.importCount,
-           exportCount: r.exportCount,
-         })),
+          ranked: top.map((r: RankedFile) => ({
+            relativePath: r.relativePath,
+            score: r.score,
+            metric: r.metric,
+            functionCount: r.functionCount,
+            classCount: r.classCount,
+            importCount: r.importCount,
+            exportCount: r.exportCount,
+          })),
           recommendations,
         };
 
@@ -404,9 +438,9 @@ export function registerTools(server: McpServer): void {
       title: "Trace Call Chain",
       description: "Traces the call chain / dependency path from one function or file to another. Shows the full path through the codebase.",
       inputSchema: z.object({
-        from: z.string().min(1).max(200).describe("Starting function, class, or file name (case-insensitive partial match)"),
-        to: z.string().min(1).max(200).describe("Target function, class, or file name (case-insensitive partial match)"),
-        directory: z.string().min(1).max(500).describe("Path to the codebase directory (must be scanned first)"),
+        from: z.string().min(1).describe("Starting function, class, or file name"),
+        to: z.string().min(1).describe("Target function, class, or file name"),
+        directory: z.string().min(1).describe("Path to the codebase directory (must be scanned first)"),
       }),
       outputSchema: z.object({
         found: z.boolean(),
@@ -450,9 +484,9 @@ export function registerTools(server: McpServer): void {
       title: "Analyze Code Complexity",
       description: "Analyze code complexity metrics for each file in the codebase. Identifies files that may need refactoring based on cyclomatic complexity, cognitive complexity, nesting depth, and size.",
       inputSchema: z.object({
-        directory: z.string().min(1).max(500).describe("Path to the codebase directory (must be scanned first)"),
-        threshold: z.number().min(0).max(100).optional().describe("Minimum complexity score to report (0-100)"),
-        topN: z.number().min(1).max(100).default(10).describe("Number of most complex files to return"),
+        directory: z.string().min(1).describe("Path to the codebase directory (must be scanned first)"),
+        threshold: z.number().optional().describe("Minimum complexity score to report (0-100)"),
+        topN: z.number().min(1).default(10).describe("Number of most complex files to return"),
       }),
       outputSchema: z.object({
         totalFiles: z.number(),
@@ -480,25 +514,45 @@ export function registerTools(server: McpServer): void {
         const parser = new ProjectParser();
         const parseResult = await parser.parse(validatedDir);
 
-        const project = new Project({
-          skipAddingFilesFromTsConfig: true,
-          compilerOptions: {
-            allowJs: true,
-            checkJs: false,
-            noEmit: true,
-          },
+        const results: ComplexityResult[] = parseResult.files.map((fileInfo) => {
+          const cyclomaticComplexity = calculateCyclomaticComplexityFromBodies(fileInfo.functions);
+          const cognitiveComplexity = calculateCognitiveComplexityFromBodies(fileInfo.functions);
+          const nestingDepth = calculateNestingDepthFromBodies(fileInfo.functions);
+          const linesOfCode = fileInfo.totalLines;
+          const functionCount = fileInfo.functions.length;
+          const classCount = fileInfo.classes.length;
+
+          const issues = identifyComplexityIssues({
+            cyclomaticComplexity,
+            cognitiveComplexity,
+            nestingDepth,
+            linesOfCode,
+            functionCount,
+            classCount,
+          });
+
+          const overallScore = calculateComplexityScore({
+            cyclomaticComplexity,
+            cognitiveComplexity,
+            nestingDepth,
+            linesOfCode,
+            functionCount,
+            classCount,
+          });
+
+          return {
+            filePath: fileInfo.filePath,
+            relativePath: fileInfo.relativePath,
+            cyclomaticComplexity,
+            cognitiveComplexity,
+            nestingDepth,
+            linesOfCode,
+            functionCount,
+            classCount,
+            overallScore,
+            issues,
+          };
         });
-
-        const sourceFiles = project.getSourceFiles();
-        for (const sf of sourceFiles) {
-          project.removeSourceFile(sf);
-        }
-
-        const files = parseResult.files.map(f => f.filePath);
-        project.addSourceFilesAtPaths(files);
-
-        const complexityAnalyzer = new ComplexityAnalyzer(project, validatedDir);
-        const results = complexityAnalyzer.analyzeProject(parseResult);
 
         const filteredResults = threshold
           ? results.filter(r => r.overallScore >= threshold)
@@ -545,4 +599,107 @@ export function registerTools(server: McpServer): void {
       });
     }
   );
+
+  function calculateCyclomaticComplexityFromBodies(functions: { body: string }[]): number {
+    let complexity = 1;
+    for (const fn of functions) {
+      const body = fn.body;
+      const keywords = ['if ', 'for ', 'while ', 'switch ', 'catch ', '&&', '||', '? '];
+      for (const kw of keywords) {
+        const count = (body.match(new RegExp(kw.replace(' ', '\\b'), 'g')) || []).length;
+        complexity += count;
+      }
+    }
+    return complexity;
+  }
+
+  function calculateCognitiveComplexityFromBodies(functions: { body: string }[]): number {
+    let complexity = 0;
+    let nestingLevel = 0;
+    for (const fn of functions) {
+      const body = fn.body;
+      let i = 0;
+      while (i < body.length) {
+        const char = body[i];
+        if (char === '{') {
+          nestingLevel++;
+        } else if (char === '}') {
+          nestingLevel = Math.max(0, nestingLevel - 1);
+        }
+        const remaining = body.slice(i);
+        if (remaining.startsWith('if ') || remaining.startsWith('for ') ||
+            remaining.startsWith('while ') || remaining.startsWith('switch ') ||
+            remaining.startsWith('catch ') || remaining.startsWith('try ')) {
+          complexity++;
+          complexity += nestingLevel;
+        }
+        i++;
+      }
+    }
+    return complexity;
+  }
+
+  function calculateNestingDepthFromBodies(functions: { body: string }[]): number {
+    let maxNesting = 0;
+    let currentNesting = 0;
+    for (const fn of functions) {
+      for (const char of fn.body) {
+        if (char === '{') {
+          currentNesting++;
+          maxNesting = Math.max(maxNesting, currentNesting);
+        } else if (char === '}') {
+          currentNesting = Math.max(0, currentNesting - 1);
+        }
+      }
+    }
+    return maxNesting;
+  }
+
+  function identifyComplexityIssues(metrics: {
+    cyclomaticComplexity: number;
+    cognitiveComplexity: number;
+    nestingDepth: number;
+    linesOfCode: number;
+    functionCount: number;
+    classCount: number;
+  }): string[] {
+    const issues: string[] = [];
+    if (metrics.cyclomaticComplexity > 10) {
+      issues.push(`Cyclomatic complexity (${metrics.cyclomaticComplexity}) exceeds threshold of 10`);
+    }
+    if (metrics.cognitiveComplexity > 15) {
+      issues.push(`Cognitive complexity (${metrics.cognitiveComplexity}) exceeds threshold of 15`);
+    }
+    if (metrics.nestingDepth > 4) {
+      issues.push(`Nesting depth (${metrics.nestingDepth}) exceeds threshold of 4`);
+    }
+    if (metrics.linesOfCode > 500) {
+      issues.push(`Lines of code (${metrics.linesOfCode}) exceeds 500 - file is large`);
+    }
+    if (metrics.functionCount > 20) {
+      issues.push(`Function count (${metrics.functionCount}) exceeds 20 - too many functions`);
+    }
+    if (metrics.classCount > 10) {
+      issues.push(`Class count (${metrics.classCount}) exceeds 10 - too many classes`);
+    }
+    return issues;
+  }
+
+  function calculateComplexityScore(metrics: {
+    cyclomaticComplexity: number;
+    cognitiveComplexity: number;
+    nestingDepth: number;
+    linesOfCode: number;
+    functionCount: number;
+    classCount: number;
+  }): number {
+    let score = 0;
+    score += Math.min(metrics.cyclomaticComplexity * 4, 25);
+    score += Math.min(metrics.cognitiveComplexity * 3, 25);
+    score += Math.min(metrics.nestingDepth * 5, 25);
+    score += Math.min((metrics.linesOfCode / 500) * 15, 15);
+    score += Math.min((metrics.functionCount / 20) * 5, 5);
+    score += Math.min((metrics.classCount / 10) * 5, 5);
+    return Math.min(Math.round(score), 100);
+  }
 }

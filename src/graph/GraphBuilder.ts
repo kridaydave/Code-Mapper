@@ -21,13 +21,8 @@ export class GraphBuilder {
       }
     }
 
-    const fileNodeIds = new Map<string, string>();
-
-    // Phase 1: Create file nodes
     for (const fileInfo of parseResult.files) {
       const fileId = `file:${fileInfo.filePath}`;
-      fileNodeIds.set(fileInfo.relativePath, fileId);
-      fileNodeIds.set(fileInfo.filePath, fileId);
 
       graph.addNode(fileId, {
         kind: "file",
@@ -43,7 +38,6 @@ export class GraphBuilder {
       });
     }
 
-    // Phase 2: Create function and class nodes, add containment edges
     for (const fileInfo of parseResult.files) {
       const fileId = `file:${fileInfo.filePath}`;
 
@@ -54,18 +48,6 @@ export class GraphBuilder {
           label: fn.name,
           filePath: fileInfo.filePath,
           lineNumber: fn.lineNumber,
-        });
-
-        graph.addEdge(fileId, fnId, {
-          kind: "contains",
-          label: `contains ${fn.name}`,
-        });
-
-        edges.push({
-          source: fileId,
-          target: fnId,
-          kind: "contains",
-          label: `contains ${fn.name}`,
         });
 
         nodes.push({
@@ -86,18 +68,6 @@ export class GraphBuilder {
           lineNumber: cls.lineNumber,
         });
 
-        graph.addEdge(fileId, clsId, {
-          kind: "contains",
-          label: `contains ${cls.name}`,
-        });
-
-        edges.push({
-          source: fileId,
-          target: clsId,
-          kind: "contains",
-          label: `contains ${cls.name}`,
-        });
-
         nodes.push({
           id: clsId,
           kind: "class",
@@ -108,7 +78,6 @@ export class GraphBuilder {
       }
     }
 
-    // Phase 3: Build import edges between files
     for (const fileInfo of parseResult.files) {
       const sourceFileId = `file:${fileInfo.filePath}`;
 
@@ -124,11 +93,6 @@ export class GraphBuilder {
                 : "imports module";
 
             if (!graph.hasEdge(sourceFileId, targetFileId)) {
-              graph.addEdge(sourceFileId, targetFileId, {
-                kind: "imports",
-                label: edgeLabel,
-              });
-
               edges.push({
                 source: sourceFileId,
                 target: targetFileId,
@@ -141,22 +105,16 @@ export class GraphBuilder {
       }
     }
 
-    // Phase 4: Build extends/implements edges for classes
     for (const fileInfo of parseResult.files) {
       for (const cls of fileInfo.classes) {
         const clsId = `class:${fileInfo.filePath}:${cls.name}:${cls.lineNumber}`;
 
         if (cls.extends) {
-          // Try to find the parent class in the codebase
-          const parentName = cls.extends.split("<")[0].trim(); // Handle generics
+          const parentName = cls.extends.split("<")[0].trim();
           const parentClass = this.findClassByName(parentName, parseResult, classLookup);
           if (parentClass) {
             const parentId = `class:${parentClass.filePath}:${parentClass.name}:${parentClass.lineNumber}`;
             if (graph.hasNode(parentId)) {
-              graph.addEdge(clsId, parentId, {
-                kind: "extends",
-                label: `extends ${parentClass.name}`,
-              });
               edges.push({
                 source: clsId,
                 target: parentId,
@@ -173,10 +131,6 @@ export class GraphBuilder {
           if (implClass) {
             const implId = `class:${implClass.filePath}:${implClass.name}:${implClass.lineNumber}`;
             if (graph.hasNode(implId)) {
-              graph.addEdge(clsId, implId, {
-                kind: "implements",
-                label: `implements ${implClass.name}`,
-              });
               edges.push({
                 source: clsId,
                 target: implId,
@@ -193,50 +147,39 @@ export class GraphBuilder {
   }
 
   private resolveImportPath(fromFile: string, moduleSpecifier: string, parseResult: ParseResult): string | null {
-    // Skip external packages (no leading . or /)
     if (!moduleSpecifier.startsWith(".") && !moduleSpecifier.startsWith("/")) {
       return null;
     }
 
-    // Strip .js/.jsx/.ts/.tsx extension from the specifier
-    let specifier = moduleSpecifier;
-    for (const ext of [".js", ".jsx", ".ts", ".tsx"]) {
-      if (specifier.endsWith(ext)) {
-        specifier = specifier.slice(0, -ext.length);
-        break;
-      }
-    }
+    let specifier = moduleSpecifier.replace(/\.(ts|tsx|js|jsx|mts|cts|mjs|cjs)$/, "");
 
-    // Resolve relative path using forward-slash logic (ts-morph always uses /)
     const fromDir = fromFile.replace(/\\/g, "/").replace(/\/[^/]+$/, "");
     const parts = [...(fromDir === "" ? [] : fromDir.split("/")), ...specifier.split("/")];
     const resolved: string[] = [];
-     for (const part of parts) {
-       if (part === "..") {
-         if (resolved.length > 0) {
-           resolved.pop();
-         }
-         // else: excessive ".." — ignore, prevents escaping root
-       } else if (part !== "." && part !== "") {
-         resolved.push(part);
-       }
-     }
-     // Reconstruct with the drive prefix if present
-     let resolvedPath = resolved.join("/");
-     // If original fromFile had a Windows drive letter, preserve it
-     const fromFileNormalized = fromFile.replace(/\\/g, "/");
-     const driveMatch = fromFileNormalized.match(/^([A-Za-z]:\/)/);
-      if (driveMatch && !resolvedPath.startsWith(driveMatch[1])) {
-        resolvedPath = driveMatch[1] + resolvedPath;
+    for (const part of parts) {
+      if (part === "..") {
+        if (resolved.length > 0) {
+          resolved.pop();
+        }
+      } else if (part !== "." && part !== "") {
+        resolved.push(part);
       }
+    }
+    let resolvedPath = resolved.join("/");
+    const fromFileNormalized = fromFile.replace(/\\/g, "/");
+    const driveMatch = fromFileNormalized.match(/^([A-Za-z]:\/)/);
+    if (driveMatch && !resolvedPath.startsWith(driveMatch[1])) {
+      resolvedPath = driveMatch[1] + resolvedPath;
+    }
 
-    // Try exact match first
     if (parseResult.files.some(f => f.filePath === resolvedPath)) {
       return resolvedPath;
     }
 
-    // Try adding extensions
-    const extensions = [".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.tsx", "/index.js", "/index.jsx"];
+    const extensions = [
+      ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs",
+      "/index.ts", "/index.tsx", "/index.js", "/index.jsx", "/index.mts", "/index.cts", "/index.mjs", "/index.cjs"
+    ];
     for (const ext of extensions) {
       const candidate = resolvedPath + ext;
       if (parseResult.files.some(f => f.filePath === candidate)) {

@@ -53,9 +53,6 @@ export class GraphAnalyzer {
     return this.parseResult;
   }
 
-  /**
-   * Rank files by centrality metric
-   */
   rankImpact(metric: "inDegree" | "outDegree" | "betweenness" | "pagerank" = "inDegree"): RankedFile[] {
     const fileNodes = this.nodes.filter((n: GraphNode) => n.kind === "file");
     const scores = new Map<string, number>();
@@ -108,17 +105,25 @@ export class GraphAnalyzer {
     return ranked;
   }
 
-  /**
-   * Find functions or classes by name
-   */
-  findFunction(name: string, type: "function" | "class" | "any" = "any"): FunctionMatch[] {
+  findFunction(name: string, type: "function" | "class" | "any" = "any", useRegex?: boolean): FunctionMatch[] {
     const matches: FunctionMatch[] = [];
+
+    let regex: RegExp | null = null;
+    if (useRegex) {
+      regex = new RegExp(name, "i");
+    }
     const lowerName = name.toLowerCase();
 
     for (const node of this.nodes) {
       if (type !== "any" && node.kind !== type) continue;
       if (node.kind === "file") continue;
-      if (!node.label.toLowerCase().includes(lowerName)) continue;
+
+      const nodeLabel = node.label;
+      const matchesPattern = regex
+        ? regex.test(nodeLabel)
+        : nodeLabel.toLowerCase().includes(lowerName);
+
+      if (!matchesPattern) continue;
 
       const fileInfo = this.parseResult.files.find((f) => f.filePath === node.filePath);
       if (!fileInfo) continue;
@@ -157,9 +162,6 @@ export class GraphAnalyzer {
     return matches;
   }
 
-  /**
-   * Get callers (files that import this file)
-   */
   getCallers(nodeId: string): string[] {
     const callers: string[] = [];
     for (const neighbor of this.graph.inNeighbors(nodeId)) {
@@ -171,9 +173,6 @@ export class GraphAnalyzer {
     return callers;
   }
 
-  /**
-   * Get callees (files this file imports)
-   */
   getCallees(nodeId: string): string[] {
     const callees: string[] = [];
     for (const neighbor of this.graph.outNeighbors(nodeId)) {
@@ -185,9 +184,6 @@ export class GraphAnalyzer {
     return callees;
   }
 
-  /**
-   * Find shortest paths between two nodes
-   */
   traceCallChain(from: string, to: string): CallChainResult {
     const fromNodes = this.nodes.filter((n: GraphNode) => n.label.toLowerCase().includes(from.toLowerCase()));
     const toNodes = this.nodes.filter((n: GraphNode) => n.label.toLowerCase().includes(to.toLowerCase()));
@@ -224,21 +220,10 @@ export class GraphAnalyzer {
     };
   }
 
-  /**
-   * Generate a Mermaid graph diagram string
-   */
   toMermaid(targetFile?: string): string {
     const lines: string[] = ["graph TD"];
 
-    const nodesToInclude = targetFile
-      ? this.nodes.filter((n: GraphNode) => {
-          const lowerTarget = targetFile.toLowerCase().replace(/\\/g, "/");
-          const lowerPath = n.filePath.toLowerCase().replace(/\\/g, "/");
-          const basename = lowerPath.split("/").pop() ?? "";
-          return basename.includes(lowerTarget) ||
-                 lowerPath.split("/").some(seg => seg.includes(lowerTarget));
-        })
-      : this.nodes;
+    const nodesToInclude = this.filterNodesForTarget(targetFile);
 
     const nodeIds = new Set(nodesToInclude.map((n: GraphNode) => n.id));
 
@@ -262,9 +247,6 @@ export class GraphAnalyzer {
     return lines.join("\n");
   }
 
-  /**
-   * Generate a DOT (Graphviz) graph diagram string
-   */
   toDot(targetFile?: string): string {
     const lines: string[] = [
       "digraph codegraph {",
@@ -273,21 +255,13 @@ export class GraphAnalyzer {
       "  edge [fontname=\"Helvetica\"];",
     ];
 
-    const nodesToInclude = targetFile
-      ? this.nodes.filter((n: GraphNode) => {
-          const lowerTarget = targetFile.toLowerCase().replace(/\\/g, "/");
-          const lowerPath = n.filePath.toLowerCase().replace(/\\/g, "/");
-          const basename = lowerPath.split("/").pop() ?? "";
-          return basename.includes(lowerTarget) ||
-                 lowerPath.split("/").some(seg => seg.includes(lowerTarget));
-        })
-      : this.nodes;
+    const nodesToInclude = this.filterNodesForTarget(targetFile);
 
     const nodeIds = new Set(nodesToInclude.map((n: GraphNode) => n.id));
 
     for (const node of nodesToInclude) {
       const safeId = this.sanitizeId(node.id);
-      const safeLabel = this.sanitizeDotText(node.label);
+      const safeLabel = this.sanitizeLabel(node.label);
       let shape: string;
       let fillcolor: string;
 
@@ -349,30 +323,19 @@ export class GraphAnalyzer {
     return lines.join("\n");
   }
 
-  /**
-   * Generate a PlantUML graph diagram string
-   */
   toPlantUML(targetFile?: string): string {
     const lines: string[] = [
       "@startuml",
       "skinparam linetype ortho",
     ];
 
-    const nodesToInclude = targetFile
-      ? this.nodes.filter((n: GraphNode) => {
-          const lowerTarget = targetFile.toLowerCase().replace(/\\/g, "/");
-          const lowerPath = n.filePath.toLowerCase().replace(/\\/g, "/");
-          const basename = lowerPath.split("/").pop() ?? "";
-          return basename.includes(lowerTarget) ||
-                 lowerPath.split("/").some(seg => seg.includes(lowerTarget));
-        })
-      : this.nodes;
+    const nodesToInclude = this.filterNodesForTarget(targetFile);
 
     const nodeIds = new Set(nodesToInclude.map((n: GraphNode) => n.id));
 
     for (const node of nodesToInclude) {
       const safeId = this.sanitizeId(node.id);
-      const safeLabel = this.sanitizePlantUMLText(`${node.kind}: ${node.label}`);
+      const safeLabel = this.sanitizeLabel(`${node.kind}: ${node.label}`);
 
       switch (node.kind) {
         case "file":
@@ -420,17 +383,6 @@ export class GraphAnalyzer {
     return lines.join("\n");
   }
 
-  private sanitizeDotText(text: string): string {
-    return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
-  }
-
-  private sanitizePlantUMLText(text: string): string {
-    return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
-  }
-
-  /**
-   * Detect cycles in the graph
-   */
   detectCycles(maxDepth = 10000): string[][] {
     const cycles: string[][] = [];
     const visited = new Set<string>();
@@ -492,11 +444,28 @@ export class GraphAnalyzer {
     return cycles;
   }
 
+  private sanitizeLabel(text: string): string {
+    return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+  }
+
   private sanitizeId(id: string): string {
     return id.replace(/[^a-zA-Z0-9_]/g, "_");
   }
 
   private sanitizeMermaidText(text: string): string {
     return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/%%/g, "\\%%");
+  }
+
+  private filterNodesForTarget(targetFile?: string): GraphNode[] {
+    if (!targetFile) {
+      return this.nodes;
+    }
+    const lowerTarget = targetFile.toLowerCase().replace(/\\/g, "/");
+    return this.nodes.filter((n: GraphNode) => {
+      const lowerPath = n.filePath.toLowerCase().replace(/\\/g, "/");
+      const basename = lowerPath.split("/").pop() ?? "";
+      return basename.includes(lowerTarget) ||
+             lowerPath.split("/").some(seg => seg.includes(lowerTarget));
+    });
   }
 }

@@ -40,7 +40,6 @@ export interface ParseOptions {
 
 export class ProjectParser {
   private project: Project;
-  private cache: Map<string, ParseResult> = new Map();
 
   constructor() {
     this.project = new Project({
@@ -53,6 +52,10 @@ export class ProjectParser {
     });
   }
 
+  /**
+   * @param directory - The absolute path to the project directory to parse.
+   * @param options - Optional configuration options including progress callback and max file count.
+   */
   async parse(directory: string, options?: ParseOptions): Promise<ParseResult> {
     const absoluteDir = resolve(directory);
     const onProgress = options?.onProgress;
@@ -63,10 +66,6 @@ export class ProjectParser {
     }
     if (!fs.statSync(absoluteDir).isDirectory()) {
       throw new Error(`Path is not a directory: ${absoluteDir}`);
-    }
-
-    if (this.cache.has(absoluteDir)) {
-      return this.cache.get(absoluteDir)!;
     }
 
     if (onProgress) {
@@ -89,14 +88,9 @@ export class ProjectParser {
         totalImports: 0,
         totalExports: 0,
       };
-      this.cache.set(absoluteDir, empty);
       return empty;
     }
 
-    const sourceFiles = this.project.getSourceFiles();
-    for (const sf of sourceFiles) {
-      this.project.removeSourceFile(sf);
-    }
     this.project.addSourceFilesAtPaths(files);
 
     const analyzer = new FileAnalyzer(this.project, absoluteDir);
@@ -133,16 +127,7 @@ export class ProjectParser {
       onProgress({ phase: "analyzing", current: total, total, percentComplete: 100 });
     }
 
-    this.cache.set(absoluteDir, result);
     return result;
-  }
-
-  clearCache(directory?: string): void {
-    if (directory) {
-      this.cache.delete(resolve(directory));
-    } else {
-      this.cache.clear();
-    }
   }
 
   private findFiles(directory: string): string[] {

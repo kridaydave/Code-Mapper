@@ -23,6 +23,9 @@ export class ComplexityAnalyzer {
     this.baseDirectory = baseDirectory;
   }
 
+  /**
+   * @param sourceFile - The ts-morph SourceFile to analyze.
+   */
   analyze(sourceFile: SourceFile): ComplexityResult {
     const filePath = sourceFile.getFilePath();
     const relativePath = this.getRelativePath(filePath);
@@ -66,23 +69,37 @@ export class ComplexityAnalyzer {
     };
   }
 
+  /**
+   * @param parseResult - The ParseResult from ProjectParser containing all project files.
+   */
   analyzeProject(parseResult: ParseResult): ComplexityResult[] {
     const results: ComplexityResult[] = [];
+    const failedFiles: string[] = [];
 
     for (const fileInfo of parseResult.files) {
       try {
         const sourceFile = this.project.getSourceFile(fileInfo.filePath);
         if (sourceFile) {
           results.push(this.analyze(sourceFile));
+        } else {
+          failedFiles.push(fileInfo.filePath);
         }
-      } catch {
-        // Skip files that can't be parsed
+      } catch (err) {
+        console.error(`ComplexityAnalyzer: Failed to analyze ${fileInfo.filePath}:`, err);
+        failedFiles.push(fileInfo.filePath);
       }
+    }
+
+    if (failedFiles.length > 0) {
+      console.warn(`ComplexityAnalyzer: Failed to analyze ${failedFiles.length} file(s): ${failedFiles.join(", ")}`);
     }
 
     return results;
   }
 
+  /**
+   * @param n - The number of top complex files to return.
+   */
   getTopComplexFiles(n: number): ComplexityResult[] {
     const sourceFiles = this.project.getSourceFiles();
 

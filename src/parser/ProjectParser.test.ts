@@ -73,24 +73,4 @@ describe("ProjectParser", () => {
       }
     });
   });
-
-  describe("clearCache", () => {
-    it("should clear cache for specific directory", async () => {
-      const testDir = path.resolve("./fixtures/test-project");
-      await parser.parse(testDir);
-      
-      parser.clearCache(testDir);
-      const result = await parser.parse(testDir);
-      expect(result.totalFiles).toBe(3);
-    });
-
-    it("should clear all caches when no directory specified", async () => {
-      const testDir = path.resolve("./fixtures/test-project");
-      await parser.parse(testDir);
-      
-      parser.clearCache();
-      const result = await parser.parse(testDir);
-      expect(result.totalFiles).toBe(3);
-    });
-  });
 });

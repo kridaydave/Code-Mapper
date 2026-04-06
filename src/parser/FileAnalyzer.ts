@@ -1,4 +1,5 @@
 import { SourceFile, Project } from "ts-morph";
+import { relative } from "node:path";
 import { FileInfo, FunctionInfo, ClassInfo, ImportInfo, ExportInfo, MethodInfo, PropertyInfo } from "./types.js";
 
 export class FileAnalyzer {
@@ -12,7 +13,7 @@ export class FileAnalyzer {
 
   analyze(sourceFile: SourceFile): FileInfo {
     const filePath = sourceFile.getFilePath();
-    const relativePath = this.relativePath(this.baseDirectory, filePath);
+    const relativePath = relative(this.baseDirectory, filePath).replace(/\\/g, "/");
 
     return {
       filePath,
@@ -25,29 +26,9 @@ export class FileAnalyzer {
     };
   }
 
-  private relativePath(base: string, target: string): string {
-    const baseParts = base.replace(/\\/g, "/").split("/").filter(Boolean);
-    const targetParts = target.replace(/\\/g, "/").split("/").filter(Boolean);
-
-    // Find common prefix
-    let i = 0;
-    while (i < baseParts.length && i < targetParts.length && baseParts[i] === targetParts[i]) {
-      i++;
-    }
-
-    // Verify target is actually within base directory
-    if (i < baseParts.length) {
-      throw new Error(`Target path is not within base directory: ${target} not in ${base}`);
-    }
-
-    const up = baseParts.length - i;
-    const down = targetParts.slice(i);
-    return [...Array(up).fill(".."), ...down].join("/");
-  }
-
   private extractFunctions(sourceFile: SourceFile): FunctionInfo[] {
     return sourceFile.getFunctions().map(fn => {
-      const name = fn.getName() ?? "anonymous";
+      const name = fn.getName() || "";
       const params = fn.getParameters().map(p => {
         const paramName = p.getName();
         const paramType = p.getTypeNode()?.getText() ?? "unknown";
@@ -74,7 +55,7 @@ export class FileAnalyzer {
   private extractClasses(sourceFile: SourceFile): ClassInfo[] {
     return sourceFile.getClasses().map(cls => {
       const methods: MethodInfo[] = cls.getMethods().map(m => ({
-        name: m.getName() ?? "anonymous",
+        name: m.getName() || "",
         parameters: m.getParameters().map(p => `${p.getName()}: ${p.getTypeNode()?.getText() ?? "unknown"}`),
         returnType: m.getReturnTypeNode()?.getText() ?? "void",
         isStatic: m.isStatic(),
@@ -94,7 +75,7 @@ export class FileAnalyzer {
       const implementsClauses = cls.getImplements();
 
       return {
-        name: cls.getName() ?? "anonymous",
+        name: cls.getName() || "",
         filePath: sourceFile.getFilePath(),
         lineNumber: cls.getStartLineNumber(),
         isExported: cls.isExported(),
@@ -130,7 +111,7 @@ export class FileAnalyzer {
     sourceFile.getFunctions().forEach(fn => {
       if (fn.isExported()) {
         exports.push({
-          name: fn.getName() ?? "anonymous",
+          name: fn.getName() || "",
           kind: "function",
           isDefault: fn.isDefaultExport(),
           filePath: sourceFile.getFilePath(),
@@ -142,7 +123,7 @@ export class FileAnalyzer {
     sourceFile.getClasses().forEach(cls => {
       if (cls.isExported()) {
         exports.push({
-          name: cls.getName() ?? "anonymous",
+          name: cls.getName() || "",
           kind: "class",
           isDefault: cls.isDefaultExport(),
           filePath: sourceFile.getFilePath(),
@@ -204,12 +185,6 @@ export class FileAnalyzer {
       }
     });
 
-    const seen = new Set<string>();
-    return exports.filter(exp => {
-      const key = `${exp.name}|${exp.kind}|${exp.lineNumber}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    return exports;
   }
 }
