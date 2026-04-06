@@ -40,6 +40,7 @@ export interface ParseOptions {
 
 export class ProjectParser {
   private project: Project;
+  private cache: Map<string, ParseResult> = new Map();
 
   constructor() {
     this.project = new Project({
@@ -61,11 +62,20 @@ export class ProjectParser {
     const onProgress = options?.onProgress;
     const maxFiles = options?.maxFiles ?? MAX_FILES;
 
+    const sourceFiles = this.project.getSourceFiles();
+    for (const sf of sourceFiles) {
+      this.project.removeSourceFile(sf);
+    }
+
     if (!fs.existsSync(absoluteDir)) {
       throw new Error(`Directory does not exist: ${absoluteDir}`);
     }
     if (!fs.statSync(absoluteDir).isDirectory()) {
       throw new Error(`Path is not a directory: ${absoluteDir}`);
+    }
+
+    if (this.cache.has(absoluteDir)) {
+      return this.cache.get(absoluteDir)!;
     }
 
     if (onProgress) {
@@ -127,7 +137,16 @@ export class ProjectParser {
       onProgress({ phase: "analyzing", current: total, total, percentComplete: 100 });
     }
 
+    this.cache.set(absoluteDir, result);
     return result;
+  }
+
+  clearCache(directory?: string): void {
+    if (directory) {
+      this.cache.delete(resolve(directory));
+    } else {
+      this.cache.clear();
+    }
   }
 
   private findFiles(directory: string): string[] {

@@ -50,12 +50,22 @@ export class GraphBuilder {
           lineNumber: fn.lineNumber,
         });
 
+        graph.addEdge(fileId, fnId, {
+          kind: "contains",
+          label: `contains ${fn.name}`,
+        });
         nodes.push({
           id: fnId,
           kind: "function",
           label: fn.name,
           filePath: fileInfo.filePath,
           lineNumber: fn.lineNumber,
+        });
+        edges.push({
+          source: fileId,
+          target: fnId,
+          kind: "contains",
+          label: `contains ${fn.name}`,
         });
       }
 
@@ -68,12 +78,22 @@ export class GraphBuilder {
           lineNumber: cls.lineNumber,
         });
 
+        graph.addEdge(fileId, clsId, {
+          kind: "contains",
+          label: `contains ${cls.name}`,
+        });
         nodes.push({
           id: clsId,
           kind: "class",
           label: cls.name,
           filePath: fileInfo.filePath,
           lineNumber: cls.lineNumber,
+        });
+        edges.push({
+          source: fileId,
+          target: clsId,
+          kind: "contains",
+          label: `contains ${cls.name}`,
         });
       }
     }
@@ -93,6 +113,10 @@ export class GraphBuilder {
                 : "imports module";
 
             if (!graph.hasEdge(sourceFileId, targetFileId)) {
+              graph.addEdge(sourceFileId, targetFileId, {
+                kind: "imports",
+                label: edgeLabel,
+              });
               edges.push({
                 source: sourceFileId,
                 target: targetFileId,

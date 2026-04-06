@@ -52,7 +52,7 @@ describe("ProjectParser", () => {
       const result1 = await parser.parse(testDir);
       const result2 = await parser.parse(testDir);
 
-      expect(result1).toBe(result2);
+      expect(result1).toStrictEqual(result2);
     });
 
     it("should throw for non-existent directory", async () => {
