@@ -19,6 +19,7 @@ An MCP server that uses AST parsing to map TypeScript/JavaScript codebase struct
 | `analyze_dependencies` | Returns the full dependency graph or a subgraph for a specific file (JSON or Mermaid) |
 | `rank_impact` | Ranks files by centrality (in-degree, out-degree, betweenness) to identify critical modules |
 | `trace_call_chain` | Traces the call chain / dependency path from one function or file to another |
+| `analyze_complexity` | Analyzes code complexity metrics for each file (cyclomatic, cognitive complexity, nesting depth) |
 
 ## MCP Resources
 

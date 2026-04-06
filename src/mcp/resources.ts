@@ -5,6 +5,10 @@ import { analyzerCache, getLastScannedDirectory, getAnalyzerFromCache } from "./
 const RANK_CACHE_LIMIT = 100;
 const rankCache = new Map<string, RankedFile[]>();
 
+/**
+ * Registers all MCP resources with the server.
+ * Provides: codebase://summary, codebase://graph/{format}
+ */
 export function registerResources(server: McpServer): void {
   // Resource 1: codebase://summary
   server.registerResource(

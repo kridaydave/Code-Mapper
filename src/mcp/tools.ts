@@ -22,6 +22,10 @@ const BLOCKED_PATHS = [
   /^\\\\\?\\/i,
 ];
 
+/**
+ * Validates that a directory path is safe and accessible.
+ * Checks for existence, directory type, and blocked system paths.
+ */
 function validateDirectory(directory: string): string {
   const absoluteDir = resolve(directory);
 
@@ -40,6 +44,10 @@ function validateDirectory(directory: string): string {
   return absoluteDir;
 }
 
+/**
+ * Gets or creates a GraphAnalyzer for the given directory.
+ * Uses caching to avoid re-parsing the same codebase.
+ */
 async function getAnalyzer(directory: string): Promise<GraphAnalyzer> {
   const normalizedDir = normalizeCacheKey(directory);
   const cached = getAnalyzerFromCache(normalizedDir);
@@ -67,6 +75,10 @@ async function getAnalyzer(directory: string): Promise<GraphAnalyzer> {
   return analyzerPromise;
 }
 
+/**
+ * Wraps MCP tool handlers to catch errors and return structured error responses.
+ * Ensures all tool responses have consistent format regardless of success/failure.
+ */
 function safeHandler(fn: () => Promise<{
   content: Array<{ type: "text"; text: string }>;
   structuredContent?: Record<string, unknown>;
@@ -89,6 +101,10 @@ function safeHandler(fn: () => Promise<{
 
 export { validateDirectory, getAnalyzer, safeHandler, clearAnalyzerCache };
 
+/**
+ * Registers all MCP tools with the server.
+ * Includes: scan_codebase, find_function, analyze_dependencies, rank_impact, trace_call_chain, analyze_complexity
+ */
 export function registerTools(server: McpServer): void {
   // Tool 1: scan_codebase
   server.registerTool(
@@ -97,7 +113,7 @@ export function registerTools(server: McpServer): void {
       title: "Scan Codebase",
       description: "Scan a directory and return a summary of all files, functions, classes, and their relationships. Use this first before any other analysis.",
       inputSchema: z.object({
-        directory: z.string().describe("Path to the directory to scan (relative or absolute)"),
+        directory: z.string().min(1).max(500).describe("Path to the directory to scan (relative or absolute)"),
       }),
       outputSchema: z.object({
         directory: z.string(),
@@ -154,7 +170,7 @@ export function registerTools(server: McpServer): void {
       title: "Find Function or Class",
       description: "Search for a function or class by name across the codebase. Returns location, signature, callers, and callees.",
       inputSchema: z.object({
-        name: z.string().describe("Name of the function or class to search for (case-insensitive partial match)"),
+        name: z.string().min(1).max(200).describe("Name of the function or class to search for (case-insensitive partial match)"),
         directory: z.string().describe("Path to the codebase directory (must be scanned first)"),
         type: z.enum(["function", "class", "any"]).default("any").describe("Type of symbol to search for"),
       }),
@@ -223,8 +239,8 @@ export function registerTools(server: McpServer): void {
       title: "Analyze Dependencies",
       description: "Returns the dependency graph between files. Can return the full graph or a subgraph for a specific file. Supports JSON, Mermaid, DOT, and PlantUML output formats.",
       inputSchema: z.object({
-        directory: z.string().describe("Path to the codebase directory (must be scanned first)"),
-        targetFile: z.string().optional().describe("Optional: filter to show only nodes related to this file"),
+        directory: z.string().min(1).max(500).describe("Path to the codebase directory (must be scanned first)"),
+        targetFile: z.string().max(200).optional().describe("Optional: filter to show only nodes related to this file"),
         format: z.enum(["json", "mermaid", "dot", "plantuml"]).default("json").describe("Output format: json for data, mermaid/dot/plantuml for visual diagram"),
       }),
       outputSchema: z.object({
@@ -258,7 +274,10 @@ export function registerTools(server: McpServer): void {
         let cycles: string[][] = [];
 
         if (targetFile) {
-          const sanitizedTarget = targetFile.replace(/[\/\\]/g, "").replace(/\.\./g, ".");
+          const sanitizedTarget = targetFile
+            .replace(/[\/\\]/g, "")
+            .replace(/\.\./g, ".")
+            .slice(0, 200);
           const matchingNodes = nodes.filter((n: GraphNode) => n.filePath.includes(targetFile) || n.label.includes(targetFile));
           const matchingIds = new Set(matchingNodes.map((n: GraphNode) => n.id));
           const expandedIds = new Set<string>(matchingIds);
@@ -320,9 +339,9 @@ export function registerTools(server: McpServer): void {
       title: "Rank Impact",
       description: "Ranks files by centrality to identify the most important/central files in the codebase. Use this to answer questions like 'Where should I add a new feature?' or 'Which files are most critical?'",
       inputSchema: z.object({
-        directory: z.string().describe("Path to the codebase directory (must be scanned first)"),
+        directory: z.string().min(1).max(500).describe("Path to the codebase directory (must be scanned first)"),
         metric: z.enum(["inDegree", "outDegree", "betweenness", "pagerank"]).default("inDegree").describe("Centrality metric: inDegree (most depended upon), outDegree (most dependencies), betweenness (most on critical paths), pagerank (most influential based on random walk)"),
-        topN: z.number().default(10).describe("Number of top results to return"),
+        topN: z.number().min(1).max(100).default(10).describe("Number of top results to return"),
       }),
        outputSchema: z.object({
          metric: z.string(),
@@ -385,9 +404,9 @@ export function registerTools(server: McpServer): void {
       title: "Trace Call Chain",
       description: "Traces the call chain / dependency path from one function or file to another. Shows the full path through the codebase.",
       inputSchema: z.object({
-        from: z.string().describe("Starting function, class, or file name (case-insensitive partial match)"),
-        to: z.string().describe("Target function, class, or file name (case-insensitive partial match)"),
-        directory: z.string().describe("Path to the codebase directory (must be scanned first)"),
+        from: z.string().min(1).max(200).describe("Starting function, class, or file name (case-insensitive partial match)"),
+        to: z.string().min(1).max(200).describe("Target function, class, or file name (case-insensitive partial match)"),
+        directory: z.string().min(1).max(500).describe("Path to the codebase directory (must be scanned first)"),
       }),
       outputSchema: z.object({
         found: z.boolean(),
@@ -431,9 +450,9 @@ export function registerTools(server: McpServer): void {
       title: "Analyze Code Complexity",
       description: "Analyze code complexity metrics for each file in the codebase. Identifies files that may need refactoring based on cyclomatic complexity, cognitive complexity, nesting depth, and size.",
       inputSchema: z.object({
-        directory: z.string().describe("Path to the codebase directory (must be scanned first)"),
-        threshold: z.number().optional().describe("Minimum complexity score to report (0-100)"),
-        topN: z.number().default(10).describe("Number of most complex files to return"),
+        directory: z.string().min(1).max(500).describe("Path to the codebase directory (must be scanned first)"),
+        threshold: z.number().min(0).max(100).optional().describe("Minimum complexity score to report (0-100)"),
+        topN: z.number().min(1).max(100).default(10).describe("Number of most complex files to return"),
       }),
       outputSchema: z.object({
         totalFiles: z.number(),
